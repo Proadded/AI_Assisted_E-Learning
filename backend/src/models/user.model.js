@@ -16,17 +16,6 @@ const userSchema = new mongoose.Schema(
             required: true,
             minlength: 6,
         },
-        confirmPassword: {
-            type: String,
-            required: true,
-            minlength: 6,
-            validate: {
-                validator: function(value) {
-                    return value === this.password;
-                },
-                message: "Passwords do not match",
-            },
-        },
         role: {
             type: String,
             enum: ["student", "instructor", "admin"],
