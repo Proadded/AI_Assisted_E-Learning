@@ -1,34 +1,42 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from '/vite.svg'
-import './App.css'
+import React, { useEffect } from 'react'
+import Navbar from './components/Navbar'
+import { Routes, Route, Navigate } from 'react-router-dom'
+import HomePage from './components/HomePage'
+import SignupPage from './components/SignupPage'
+import LoginPage from './components/LoginPage'
+import DashboardPage from './components/DashboardPage'
+import CoursePage from './components/CoursePage'
+import useAuthStore from './store/useAuthStore'
+import { Toaster } from 'react-hot-toast'
 
-function App() {
-  const [count, setCount] = useState(0)
+const App = () => {
+  const { authUser, checkAuth, isCheckingAuth } = useAuthStore();
+
+  useEffect(() => {
+    checkAuth();
+  }, [checkAuth]);
+
+  console.log({ authUser });
+
+  if (isCheckingAuth && !authUser) return (
+    <div className='flex items-center justify-center h-screen'>
+      <div className='animate-spin rounded-full h-32 w-32 border-t-2 border-b-2 border-primary'></div>
+    </div>
+  )
+
 
   return (
-    <>
-      <div>
-        <a href="https://vite.dev" target="_blank">
-          <img src={viteLogo} className="logo" alt="Vite logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <h1>Vite + React</h1>
-      <div className="card">
-        <button onClick={() => setCount((count) => count + 1)}>
-          count is {count}
-        </button>
-        <p>
-          Edit <code>src/App.jsx</code> and save to test HMR
-        </p>
-      </div>
-      <p className="read-the-docs">
-        Click on the Vite and React logos to learn more
-      </p>
-    </>
+    <div>
+      <Navbar />
+      <Routes>
+        <Route path="/" element={authUser ? <HomePage /> : <Navigate to="/login" />} />
+        <Route path="/signup" element={!authUser ? <SignupPage /> : <Navigate to="/" />} />
+        <Route path="/login" element={!authUser ? <LoginPage /> : <Navigate to="/" />} />
+        <Route path="/dashboard" element={authUser ? <DashboardPage /> : <Navigate to="/login" />} />
+        <Route path="/course" element={authUser ? <CoursePage /> : <Navigate to="/login" />} />
+      </Routes>
+      <Toaster />
+    </div>
   )
 }
 
