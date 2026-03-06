@@ -152,6 +152,8 @@ const LogoMark = () => (
 
 const Navbar = () => {
     const { authUser, logout } = useAuthStore()
+    const role = authUser?.role
+    const isStudent = role === "student"
 
     return (
         <>
@@ -172,6 +174,10 @@ const Navbar = () => {
                         </span>
 
                         <div className="nb-pip" />
+
+                        <a href={isStudent ? "/dashboard" : "/tutor"} className="nb-btn-courses">
+                            Dashboard
+                        </a>
 
                         <a href="/course" className="nb-btn-courses">
                             Courses

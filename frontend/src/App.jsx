@@ -6,11 +6,18 @@ import SignupPage from './components/SignupPage'
 import LoginPage from './components/LoginPage'
 import DashboardPage from './components/DashboardPage'
 import CoursePage from './components/CoursePage'
+
+//Future pages
+import TutorPlaceholderPage from './components/TutorPlaceholderPage'
+
 import useAuthStore from './store/useAuthStore'
 import { Toaster } from 'react-hot-toast'
 
 const App = () => {
   const { authUser, checkAuth, isCheckingAuth } = useAuthStore();
+  const role = authUser?.role
+  const isStudent = role === "student"
+  const isTutor = role === "instructor" || role === "tutor"
 
   useEffect(() => {
     checkAuth();
@@ -29,11 +36,33 @@ const App = () => {
     <div>
       <Navbar />
       <Routes>
-        <Route path="/" element={authUser ? <HomePage /> : <Navigate to="/login" />} />
-        <Route path="/signup" element={!authUser ? <SignupPage /> : <Navigate to="/" />} />
-        <Route path="/login" element={!authUser ? <LoginPage /> : <Navigate to="/" />} />
-        <Route path="/dashboard" element={authUser ? <DashboardPage /> : <Navigate to="/login" />} />
-        <Route path="/course" element={authUser ? <CoursePage /> : <Navigate to="/login" />} />
+        <Route path="/" element={<HomePage />} />
+        <Route
+          path="/signup"
+          element={!authUser ? <SignupPage /> : <Navigate to={isStudent ? "/course" : "/tutor"} />}
+        />
+        <Route
+          path="/login"
+          element={!authUser ? <LoginPage /> : <Navigate to={isStudent ? "/course" : "/tutor"} />}
+        />
+        <Route
+          path="/dashboard"
+          element={
+            !authUser ? <Navigate to="/login" /> : isStudent ? <DashboardPage /> : <Navigate to="/tutor" />
+          }
+        />
+        <Route
+          path="/course"
+          element={
+            !authUser ? <Navigate to="/login" /> : isStudent ? <CoursePage /> : <Navigate to="/tutor" />
+          }
+        />
+        <Route
+          path="/tutor"
+          element={
+            !authUser ? <Navigate to="/login" /> : isTutor ? <TutorPlaceholderPage /> : <Navigate to="/course" />
+          }
+        />
       </Routes>
       <Toaster />
     </div>

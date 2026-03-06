@@ -455,8 +455,9 @@ const SignupPage = () => {
 
     const handleSubmit = async e => {
         e.preventDefault()
-        if (!validateForm()) return
-        try { await signup(formData) } catch (err) { console.error(err) }
+        const success = validateForm()
+        if (!success) return
+        if (success === true) signup(formData);
     }
 
     return (
@@ -539,12 +540,24 @@ const SignupPage = () => {
                                 <div className="sp-label"><span className="sp-label-text">I want to...</span></div>
                                 <div className="sp-role-group">
                                     <label className={`sp-role-opt ${formData.role === 'student' ? 'active' : ''}`}>
-                                        <input type="radio" name="role" value="student" checked={formData.role === 'student'} onChange={handleChange} />
+                                        <input
+                                            type="radio"
+                                            name="role"
+                                            value="student"
+                                            checked={formData.role === 'student'}
+                                            onChange={handleChange}
+                                        />
                                         <span>Learn as a Student</span>
                                     </label>
-                                    <label className={`sp-role-opt ${formData.role === 'tutor' ? 'active' : ''}`}>
-                                        <input type="radio" name="role" value="tutor" checked={formData.role === 'tutor'} onChange={handleChange} />
-                                        <span>Teach as a Tutor</span>
+                                    <label className={`sp-role-opt ${formData.role === 'instructor' ? 'active' : ''}`}>
+                                        <input
+                                            type="radio"
+                                            name="role"
+                                            value="instructor"
+                                            checked={formData.role === 'instructor'}
+                                            onChange={handleChange}
+                                        />
+                                        <span>Teach as a Instructor</span>
                                     </label>
                                 </div>
                             </div>
