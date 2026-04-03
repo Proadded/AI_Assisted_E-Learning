@@ -21,11 +21,11 @@ const SkeletonCard = () => (
 // ─── Course Card ──────────────────────────────────────────────────────────────
 const CourseCard = ({ course, index }) => {
     const navigate = useNavigate();
-    const completed = course.userProgress?.completedVideos?.length ?? 0;
-    const total = course.videoCount ?? 0;
-    const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
-    const isEnrolled = course.userProgress !== null && course.userProgress !== undefined;
-    const isCompleted = percentage === 100;
+    const completed = course.realProgress?.completedCount ?? 0;
+    const total = course.realProgress?.totalCount ?? course.videoCount ?? 0;
+    const percentage = course.realProgress?.percentComplete ?? 0;
+    const isEnrolled = completed > 0;
+    const isCompleted = total > 0 && completed === total;
 
     return (
         <div
@@ -133,7 +133,26 @@ const CoursesPage = () => {
         const fetchCourses = async () => {
             try {
                 const res = await axiosInstance.get("/courses");
-                setCourses(res.data);
+                const courses = res.data;
+
+                // Fetch progress for all courses in parallel
+                const progressResults = await Promise.allSettled(
+                    courses.map(c => axiosInstance.get(`/progress/course/${c._id}`))
+                );
+
+                // Merge real progress into each course object
+                const merged = courses.map((c, i) => {
+                    const result = progressResults[i];
+                    if (result.status === "fulfilled") {
+                        return {
+                            ...c,
+                            realProgress: result.value.data
+                        };
+                    }
+                    return { ...c, realProgress: { completedCount: 0, totalCount: 0, percentComplete: 0 } };
+                });
+
+                setCourses(merged);
             } catch (err) {
                 console.error("Failed to load courses:", err);
                 toast.error("Failed to load courses");
@@ -149,15 +168,16 @@ const CoursesPage = () => {
             c.title.toLowerCase().includes(search.toLowerCase()) ||
             (c.instructor ?? "").toLowerCase().includes(search.toLowerCase());
 
+        const completedCount = c.realProgress?.completedCount ?? 0;
         const percentage =
             c.videoCount > 0
                 ? Math.round(
-                    ((c.userProgress?.completedVideos?.length ?? 0) / c.videoCount) * 100
+                    (completedCount / c.videoCount) * 100
                 )
                 : 0;
 
         if (filter === "enrolled")
-            return matchesSearch && c.userProgress != null && percentage < 100;
+            return matchesSearch && completedCount > 0 && percentage < 100;
         if (filter === "completed") return matchesSearch && percentage === 100;
         return matchesSearch;
     });

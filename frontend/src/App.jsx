@@ -6,6 +6,7 @@ import SignupPage from './components/SignupPage'
 import LoginPage from './components/LoginPage'
 import DashboardPage from './components/DashboardPage'
 import CoursePage from './components/CoursePage'
+import CourseDetailPage from "./pages/CourseDetailPage.jsx";
 
 //Future pages
 import TutorPlaceholderPage from './components/TutorPlaceholderPage'
@@ -63,6 +64,7 @@ const App = () => {
             !authUser ? <Navigate to="/login" /> : isTutor ? <TutorPlaceholderPage /> : <Navigate to="/course" />
           }
         />
+        <Route path="/course/:courseId" element={authUser ? <CourseDetailPage /> : <Navigate to="/login" />} />
       </Routes>
       <Toaster />
     </div>
