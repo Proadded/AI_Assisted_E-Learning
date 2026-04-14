@@ -308,6 +308,7 @@ const TestPanel = ({ videoId, onTestPassed }) => {
     const [phase, setPhase] = useState("idle");
     const [answers, setAnswers] = useState({});
     const pollInterval = useRef(null);
+    const questionStartTimeRef = useRef({});
 
     // Fetch test on mount / videoId change
     useEffect(() => {
@@ -349,12 +350,24 @@ const TestPanel = ({ videoId, onTestPassed }) => {
         if (r?.passed) onTestPassed?.();
     }, [phase]);
 
+    // Track when questions are rendered
+    useEffect(() => {
+        if (phase === "taking") {
+            test?.questions?.forEach(q => {
+                if (!questionStartTimeRef.current[q._id]) {
+                    questionStartTimeRef.current[q._id] = Date.now();
+                }
+            });
+        }
+    }, [phase, test]);
+
     // ── Submit handler ─────────────────────────────────────────────────────────
     const handleSubmit = async () => {
         setPhase("submitting");
-        const answersArray = Object.entries(answers).map(([questionId, answer]) => ({
+        const answersArray = Object.entries(answers).map(([questionId, data]) => ({
             questionId,
-            answer,
+            answer: data.answer,
+            responseTimeMs: data.responseTimeMs,
         }));
         const data = await submitAnswers(test._id, answersArray);
         if (!data) {
@@ -376,7 +389,7 @@ const TestPanel = ({ videoId, onTestPassed }) => {
     // All questions must have a non-empty answer to enable submit
     const allAnswered =
         test?.questions?.every((q) => {
-            const a = answers[q._id];
+            const a = answers[q._id]?.answer;
             return a && a.trim() !== "";
         }) ?? false;
 
@@ -426,7 +439,7 @@ const TestPanel = ({ videoId, onTestPassed }) => {
                         const isShort = q.type === "short_answer";
                         const isSubjective = isEssay || isShort;
                         const wordLimit = isEssay ? 500 : 200;
-                        const currentAnswer = answers[q._id] ?? "";
+                        const currentAnswer = answers[q._id]?.answer ?? "";
                         const words = isSubjective ? countWords(currentAnswer) : 0;
                         const overLimit = isSubjective && words > wordLimit;
 
@@ -449,9 +462,13 @@ const TestPanel = ({ videoId, onTestPassed }) => {
                                                         name={`q-${q._id}`}
                                                         value={opt}
                                                         checked={selected}
-                                                        onChange={() =>
-                                                            setAnswers((prev) => ({ ...prev, [q._id]: opt }))
-                                                        }
+                                                        onChange={() => {
+                                                            const start = questionStartTimeRef.current[q._id] || Date.now();
+                                                            setAnswers((prev) => ({ 
+                                                                ...prev, 
+                                                                [q._id]: { answer: opt, responseTimeMs: Date.now() - start } 
+                                                            }));
+                                                        }}
                                                     />
                                                     {opt}
                                                 </label>
@@ -470,9 +487,16 @@ const TestPanel = ({ videoId, onTestPassed }) => {
                                                     : "Write your answer here… (up to 200 words)"
                                             }
                                             value={currentAnswer}
-                                            onChange={(e) =>
-                                                setAnswers((prev) => ({ ...prev, [q._id]: e.target.value }))
-                                            }
+                                            onChange={(e) => {
+                                                const val = e.target.value;
+                                                setAnswers((prev) => {
+                                                    const existing = prev[q._id];
+                                                    const start = questionStartTimeRef.current[q._id] || Date.now();
+                                                    // Measure time on first keystroke, or update continuously. Let's capture the final time
+                                                    const timeMs = existing?.responseTimeMs || (Date.now() - start);
+                                                    return { ...prev, [q._id]: { answer: val, responseTimeMs: timeMs } };
+                                                });
+                                            }}
                                         />
                                         <p className={`tp-word-count${overLimit ? " tp-word-limit" : ""}`}>
                                             {words} / {wordLimit} words

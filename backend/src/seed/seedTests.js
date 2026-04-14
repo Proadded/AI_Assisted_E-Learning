@@ -8,6 +8,10 @@ import Course from "../models/course.model.js";
 dotenv.config();
 await connectDB();
 
+// To auto-generate conceptTag + phrasingSeed for new questions:
+// import { generateConceptTag } from "../lib/aiEvaluator.js";
+// const { conceptTag, phrasingSeed } = await generateConceptTag(questionText, courseTitle);
+
 // ─── Topic-specific question bank ───────────────────────────────────────────
 
 const questionBank = {
@@ -19,6 +23,8 @@ const questionBank = {
             correctAnswer: "<script>",
             maxScore: 10,
             weight: 1,
+            conceptTag: "js-basics",
+            phrasingSeed: "script_tag_html"
         },
         {
             question: "Where is JavaScript primarily executed?",
@@ -27,6 +33,8 @@ const questionBank = {
             correctAnswer: "In the browser",
             maxScore: 10,
             weight: 1,
+            conceptTag: "js-basics",
+            phrasingSeed: "browser_execution"
         },
         {
             question: "Explain in your own words what JavaScript is, and give at least two examples of what it can do in a web page.",
@@ -34,6 +42,8 @@ const questionBank = {
             rubric: "Should define JavaScript as a programming language for the web. Should mention at least two concrete use-cases such as DOM manipulation, form validation, animations, or API calls.",
             maxScore: 20,
             weight: 2,
+            conceptTag: "js-basics",
+            phrasingSeed: "general_definition_examples"
         },
     ],
 
@@ -50,6 +60,8 @@ const questionBank = {
             correctAnswer: "Value and type",
             maxScore: 10,
             weight: 1,
+            conceptTag: "operators",
+            phrasingSeed: "strict_equality_definition"
         },
         {
             question: "Which keyword is used to define an alternative branch in a conditional?",
@@ -58,6 +70,8 @@ const questionBank = {
             correctAnswer: "else",
             maxScore: 10,
             weight: 1,
+            conceptTag: "conditionals",
+            phrasingSeed: "else_branch_keyword"
         },
         {
             question: "Describe the difference between == and === in JavaScript, and explain when you would use each.",
@@ -65,6 +79,8 @@ const questionBank = {
             rubric: "Should explain loose vs strict equality, mention type coercion with ==, and recommend === for predictable comparisons. A good answer includes an example.",
             maxScore: 20,
             weight: 2,
+            conceptTag: "operators",
+            phrasingSeed: "loose_vs_strict_equality"
         },
     ],
 
@@ -76,6 +92,8 @@ const questionBank = {
             correctAnswer: "for",
             maxScore: 10,
             weight: 1,
+            conceptTag: "loops",
+            phrasingSeed: "for_loop_use_case"
         },
         {
             question: "Which string method returns a portion of a string without modifying the original?",
@@ -84,6 +102,8 @@ const questionBank = {
             correctAnswer: "slice()",
             maxScore: 10,
             weight: 1,
+            conceptTag: "string-methods",
+            phrasingSeed: "slice_string_method"
         },
         {
             question: "Write a brief explanation of how a for loop works in JavaScript. Include the three parts of its syntax and describe what each part does.",
@@ -91,6 +111,8 @@ const questionBank = {
             rubric: "Should identify initialization, condition, and increment/update. Should explain execution order. Bonus for a small example.",
             maxScore: 20,
             weight: 2,
+            conceptTag: "loops",
+            phrasingSeed: "for_loop_syntax_explanation"
         },
     ],
 
@@ -102,6 +124,8 @@ const questionBank = {
             correctAnswer: "push()",
             maxScore: 10,
             weight: 1,
+            conceptTag: "arrays",
+            phrasingSeed: "push_array_method"
         },
         {
             question: "What does array.length return?",
@@ -115,6 +139,8 @@ const questionBank = {
             correctAnswer: "The number of elements",
             maxScore: 10,
             weight: 1,
+            conceptTag: "arrays",
+            phrasingSeed: "length_property_definition"
         },
         {
             question: "Explain the difference between push/pop and shift/unshift. When would you choose one pair over the other?",
@@ -122,6 +148,8 @@ const questionBank = {
             rubric: "Should explain that push/pop operate on the end and shift/unshift on the beginning. Should mention performance or use-case considerations.",
             maxScore: 20,
             weight: 2,
+            conceptTag: "arrays",
+            phrasingSeed: "end_vs_beginning_methods"
         },
     ],
 
@@ -133,6 +161,8 @@ const questionBank = {
             correctAnswer: "return",
             maxScore: 10,
             weight: 1,
+            conceptTag: "functions",
+            phrasingSeed: "return_value_keyword"
         },
         {
             question: "Which of the following is an arrow function?",
@@ -146,6 +176,8 @@ const questionBank = {
             correctAnswer: "const fn = () => {}",
             maxScore: 10,
             weight: 1,
+            conceptTag: "functions",
+            phrasingSeed: "arrow_function_syntax_id"
         },
         {
             question: "Describe the difference between a function declaration and a function expression in JavaScript. Include a note on hoisting behavior.",
@@ -153,6 +185,8 @@ const questionBank = {
             rubric: "Should distinguish syntax (function name() {} vs const name = function() {}). Must mention that declarations are hoisted while expressions are not.",
             maxScore: 20,
             weight: 2,
+            conceptTag: "functions",
+            phrasingSeed: "declaration_vs_expression_hoisting"
         },
     ],
 
@@ -169,6 +203,8 @@ const questionBank = {
             correctAnswer: "document.querySelector()",
             maxScore: 10,
             weight: 1,
+            conceptTag: "dom-manipulation",
+            phrasingSeed: "query_selector_usage"
         },
         {
             question: "What does DOM stand for?",
@@ -182,6 +218,8 @@ const questionBank = {
             correctAnswer: "Document Object Model",
             maxScore: 10,
             weight: 1,
+            conceptTag: "dom-manipulation",
+            phrasingSeed: "dom_acronym_meaning"
         },
         {
             question: "Explain what the DOM is and how JavaScript uses it to change the content of a web page. Give an example of a common DOM operation.",
@@ -189,6 +227,8 @@ const questionBank = {
             rubric: "Should define the DOM as a tree representation of the HTML document. Should explain that JS can read/modify nodes. Example such as changing innerHTML, adding classes, or creating elements.",
             maxScore: 20,
             weight: 2,
+            conceptTag: "dom-manipulation",
+            phrasingSeed: "dom_concept_explanation"
         },
     ],
 
@@ -205,6 +245,8 @@ const questionBank = {
             correctAnswer: "document.createElement()",
             maxScore: 10,
             weight: 1,
+            conceptTag: "dom-manipulation",
+            phrasingSeed: "create_element_method"
         },
         {
             question: "What does element.remove() do?",
@@ -218,6 +260,8 @@ const questionBank = {
             correctAnswer: "Removes the element from the DOM",
             maxScore: 10,
             weight: 1,
+            conceptTag: "dom-manipulation",
+            phrasingSeed: "remove_element_definition"
         },
         {
             question: "Describe the process of dynamically adding a new list item to an existing <ul> element using JavaScript. Mention each step involved.",
@@ -225,6 +269,8 @@ const questionBank = {
             rubric: "Should cover: selecting the parent <ul>, creating a new <li> with createElement, setting its textContent, and appending it with appendChild or append. Mentioning insertBefore or prepend is a bonus.",
             maxScore: 20,
             weight: 2,
+            conceptTag: "dom-manipulation",
+            phrasingSeed: "dynamic_list_item_addition"
         },
     ],
 
@@ -241,6 +287,8 @@ const questionBank = {
             correctAnswer: "addEventListener()",
             maxScore: 10,
             weight: 1,
+            conceptTag: "event-handling",
+            phrasingSeed: "add_event_listener_method"
         },
         {
             question: "What object is automatically passed to an event handler function?",
@@ -254,6 +302,8 @@ const questionBank = {
             correctAnswer: "The event object",
             maxScore: 10,
             weight: 1,
+            conceptTag: "event-handling",
+            phrasingSeed: "event_object_parameter"
         },
         {
             question: "Explain the concept of event bubbling in JavaScript. How can you stop an event from bubbling up the DOM tree?",
@@ -261,6 +311,8 @@ const questionBank = {
             rubric: "Should explain that events propagate from the target element up through its ancestors. Must mention event.stopPropagation(). Bonus for mentioning event capturing or the useCapture parameter.",
             maxScore: 20,
             weight: 2,
+            conceptTag: "event-handling",
+            phrasingSeed: "event_bubbling_stop_propagation"
         },
     ],
 
@@ -272,6 +324,8 @@ const questionBank = {
             correctAnswer: "8",
             maxScore: 10,
             weight: 1,
+            conceptTag: "game-logic",
+            phrasingSeed: "tictactoe_win_states"
         },
         {
             question: "Which data structure is most commonly used to represent the Tic Tac Toe board in JavaScript?",
@@ -280,6 +334,8 @@ const questionBank = {
             correctAnswer: "Array",
             maxScore: 10,
             weight: 1,
+            conceptTag: "arrays",
+            phrasingSeed: "tictactoe_board_structure"
         },
         {
             question: "Describe how you would check for a winner in a Tic Tac Toe game using JavaScript. What logic or data structure would you use?",
@@ -287,6 +343,8 @@ const questionBank = {
             rubric: "Should mention storing winning combinations (rows, columns, diagonals) as arrays of indices. Should describe comparing board positions against these combinations. A good answer mentions iterating through win conditions.",
             maxScore: 20,
             weight: 2,
+            conceptTag: "game-logic",
+            phrasingSeed: "win_checking_algorithm"
         },
     ],
 
@@ -303,6 +361,8 @@ const questionBank = {
             correctAnswer: "Math.random()",
             maxScore: 10,
             weight: 1,
+            conceptTag: "math-methods",
+            phrasingSeed: "math_random_function"
         },
         {
             question: "In Rock-Paper-Scissors, how would you convert Math.random() output into one of three choices?",
@@ -316,6 +376,8 @@ const questionBank = {
             correctAnswer: "Math.floor(Math.random() * 3)",
             maxScore: 10,
             weight: 1,
+            conceptTag: "math-methods",
+            phrasingSeed: "random_mapping_choices"
         },
         {
             question: "Outline the logic you would use to determine the winner in a Rock-Paper-Scissors game. How would you handle the computer's random choice and compare it to the user's input?",
@@ -323,6 +385,8 @@ const questionBank = {
             rubric: "Should describe generating a random index for the computer's choice, mapping it to rock/paper/scissors, comparing both choices with conditional logic, and handling win/loss/draw. Mention of user input capture is a bonus.",
             maxScore: 20,
             weight: 2,
+            conceptTag: "game-logic",
+            phrasingSeed: "rps_win_determination_logic"
         },
     ],
 
@@ -334,6 +398,8 @@ const questionBank = {
             correctAnswer: "class",
             maxScore: 10,
             weight: 1,
+            conceptTag: "classes",
+            phrasingSeed: "class_keyword_identification"
         },
         {
             question: "What is the purpose of the constructor() method inside a class?",
@@ -347,6 +413,8 @@ const questionBank = {
             correctAnswer: "To initialize object properties when a new instance is created",
             maxScore: 10,
             weight: 1,
+            conceptTag: "classes",
+            phrasingSeed: "constructor_purpose_definition"
         },
         {
             question: "Explain the relationship between classes and objects in JavaScript. How does the 'this' keyword work inside a class method?",
@@ -354,6 +422,8 @@ const questionBank = {
             rubric: "Should explain that a class is a blueprint and an object is an instance. Should describe 'this' as referencing the current instance. A good answer includes an example of accessing properties via this.",
             maxScore: 20,
             weight: 2,
+            conceptTag: "classes",
+            phrasingSeed: "class_vs_object_this_keyword"
         },
     ],
 
@@ -370,6 +440,8 @@ const questionBank = {
             correctAnswer: "Managing asynchronous operations",
             maxScore: 10,
             weight: 1,
+            conceptTag: "async-await",
+            phrasingSeed: "promise_problem_solved"
         },
         {
             question: "What does the 'await' keyword do?",
@@ -383,6 +455,8 @@ const questionBank = {
             correctAnswer: "Pauses execution until the Promise resolves",
             maxScore: 10,
             weight: 1,
+            conceptTag: "async-await",
+            phrasingSeed: "await_keyword_definition"
         },
         {
             question: "Explain the evolution from callbacks to Promises to async/await. Why was each step introduced, and what problems does async/await solve compared to plain callbacks?",
@@ -390,6 +464,8 @@ const questionBank = {
             rubric: "Should mention callback hell / pyramid of doom. Should explain Promises as a cleaner way to chain async operations. Must describe async/await as syntactic sugar over Promises for readability. A good answer mentions error handling with try/catch.",
             maxScore: 20,
             weight: 2,
+            conceptTag: "async-await",
+            phrasingSeed: "async_evolution_explanation"
         },
     ],
 
@@ -401,6 +477,8 @@ const questionBank = {
             correctAnswer: "A Promise",
             maxScore: 10,
             weight: 1,
+            conceptTag: "fetch-api",
+            phrasingSeed: "fetch_return_type"
         },
         {
             question: "Which method is used to parse a JSON response from fetch()?",
@@ -414,6 +492,8 @@ const questionBank = {
             correctAnswer: "response.json()",
             maxScore: 10,
             weight: 1,
+            conceptTag: "fetch-api",
+            phrasingSeed: "json_parsing_method"
         },
         {
             question: "Describe how you would use the Fetch API to GET data from an external API and display it on a web page. Include error handling in your explanation.",
@@ -421,6 +501,8 @@ const questionBank = {
             rubric: "Should describe calling fetch() with a URL, chaining .then() or using await, parsing with .json(), and rendering data to the DOM. Must mention .catch() or try/catch for error handling. Bonus for mentioning response.ok check.",
             maxScore: 20,
             weight: 2,
+            conceptTag: "fetch-api",
+            phrasingSeed: "get_request_fetch_implementation"
         },
     ],
 };
@@ -428,6 +510,7 @@ const questionBank = {
 // ─── Seed runner ────────────────────────────────────────────────────────────
 
 const seed = async () => {
+    await Test.deleteMany({});
     const course = await Course.findOne({ title: "JavaScript for Beginners" });
     if (!course) {
         console.log("Error: Course 'JavaScript for Beginners' not found. Run seedCourse.js first.");

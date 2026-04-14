@@ -1,7 +1,15 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import axiosInstance from "../lib/axios";
 import toast from "react-hot-toast";
+
+function computeProficiency(averageScore) {
+  if (averageScore === null || averageScore === undefined) return null;
+  if (averageScore >= 80) return { label: "Mastery",     color: "#2D6A2D", bg: "#E8F5E8" };
+  if (averageScore >= 60) return { label: "Proficient",  color: "#1A5276", bg: "#D6EAF8" };
+  if (averageScore >= 40) return { label: "Developing",  color: "#784212", bg: "#FDEBD0" };
+  return                         { label: "Beginner",    color: "#6B2737", bg: "#FADBD8" };
+}
 
 // ─── Skeleton Card ────────────────────────────────────────────────────────────
 const SkeletonCard = () => (
@@ -19,13 +27,16 @@ const SkeletonCard = () => (
 );
 
 // ─── Course Card ──────────────────────────────────────────────────────────────
-const CourseCard = ({ course, index }) => {
+const CourseCard = ({ course, index, proficiencyMap = {} }) => {
     const navigate = useNavigate();
     const completed = course.realProgress?.completedCount ?? 0;
     const total = course.realProgress?.totalCount ?? course.videoCount ?? 0;
     const percentage = course.realProgress?.percentComplete ?? 0;
     const isEnrolled = completed > 0;
     const isCompleted = total > 0 && completed === total;
+
+    const avgScore = proficiencyMap[course._id?.toString()];
+    const proficiency = avgScore !== undefined ? computeProficiency(avgScore) : null;
 
     return (
         <div
@@ -77,6 +88,23 @@ const CourseCard = ({ course, index }) => {
                 >
                     {course.title}
                 </h3>
+                {proficiency && (
+                    <div className="mb-2">
+                        <span style={{
+                            display: "inline-block",
+                            padding: "2px 10px",
+                            borderRadius: "12px",
+                            fontSize: "11px",
+                            fontWeight: "500",
+                            fontFamily: "DM Sans, sans-serif",
+                            background: proficiency.bg,
+                            color: proficiency.color,
+                            letterSpacing: "0.02em",
+                        }}>
+                            {proficiency.label}
+                        </span>
+                    </div>
+                )}
                 <p className="text-stone-500 text-sm leading-relaxed line-clamp-2 mb-4 flex-1">
                     {course.description}
                 </p>
@@ -128,6 +156,41 @@ const CoursesPage = () => {
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
     const [filter, setFilter] = useState("all"); // all | enrolled | completed
+
+    const [dashboardSummary, setDashboardSummary] = useState(null);
+    const [courseScores, setCourseScores] = useState([]);
+
+    useEffect(() => {
+        const fetchDashboardData = async () => {
+            try {
+                const [summaryRes, scoresRes] = await Promise.all([
+                    axiosInstance.get("/dashboard/summary"),
+                    axiosInstance.get("/dashboard/scores")
+                ]);
+                setDashboardSummary(summaryRes.data.summary);
+                setCourseScores(scoresRes.data.scores);
+            } catch (err) {
+                // fail silently
+            }
+        };
+        fetchDashboardData();
+    }, []);
+
+    const proficiencyMap = useMemo(() => {
+        const map = {};
+        const grouped = {};
+        courseScores.forEach(r => {
+            const key = r.courseId?.toString();
+            if (!key) return;
+            if (!grouped[key]) grouped[key] = [];
+            grouped[key].push(r.totalScore);
+        });
+        Object.entries(grouped).forEach(([courseId, scores]) => {
+            const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
+            map[courseId] = Math.round(avg);
+        });
+        return map;
+    }, [courseScores]);
 
     useEffect(() => {
         const fetchCourses = async () => {
@@ -263,7 +326,7 @@ const CoursesPage = () => {
                 ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                         {filtered.map((course, i) => (
-                            <CourseCard key={course._id} course={course} index={i} />
+                            <CourseCard key={course._id} course={course} index={i} proficiencyMap={proficiencyMap} />
                         ))}
                     </div>
                 )}

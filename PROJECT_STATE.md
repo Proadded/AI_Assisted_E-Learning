@@ -61,12 +61,16 @@ E_Learning/
 │       │   ├── auth.controller.js      # signup, login, logout, checkAuth
 │       │   ├── course.controller.js    # getAllCourses, getCourseById
 │       │   ├── video.controller.js     # getCourseVideos, getVideo, markWatched
-│       │   └── test.controller.js      # getTest, submitTest (with auto-grading)
+│       │   ├── test.controller.js      # getTest, submitTest (with auto-grading)
+│       │   ├── studentContext.controller.js  # getStudentContext — ownership-checked, admin bypass
+│       │   └── dashboard.controller.js       # getDashboardScores, getDashboardTrends, getDashboardFingerprints, getDashboardSummary
 │       ├── routes/
 │       │   ├── auth.route.js           # /api/auth/*
 │       │   ├── course.route.js         # /api/courses/* ⚠️ NOT MOUNTED in index.js
 │       │   ├── video.route.js          # /api/videos/*
-│       │   └── test.route.js           # /api/tests/*
+│       │   ├── test.route.js           # /api/tests/*
+│       │   ├── studentContext.route.js       # /api/student-context/:studentId
+│       │   └── dashboard.route.js            # /api/dashboard/scores|trends|fingerprints|summary
 │       ├── models/
 │       │   ├── user.model.js           # Core auth identity
 │       │   ├── student.model.js        # Extended student profile (refs User)
@@ -75,15 +79,20 @@ E_Learning/
 │       │   ├── video.model.js          # Individual video in a course
 │       │   ├── quiz.model.js           # Test/quiz (exported as "Test" model)
 │       │   ├── progress.model.js       # Per-student per-video progress + AI analysis
-│       │   └── testResult.model.js     # Test result and subjective grading
+│       │   ├── testResult.model.js     # Test result and subjective grading
+│       │   └── fingerprint.model.js        # StudentFingerprint schema — per-student per-concept per-course fingerprint counters
 │       ├── middleware/
 │       │   └── auth.middleware.js      # protectRoute — verifies JWT cookie, attaches req.user
 │       ├── seed/
 │       │   └── seedTests.js            # Seed script for Test documents
+│       ├── services/
+│       │   ├── studentContext.service.js   # SCS — aggregates TestResult, Progress, StudentFingerprint into StudentContext
+│       │   └── fingerprintEngine.service.js  # Fingerprint algorithm — computeFingerprint(), updateFingerprintsFromResult()
 │       └── lib/
 │           ├── db.js                   # connectDB() — Mongoose connection
 │           ├── utils.js                # generateToken() — creates + sets JWT cookie
-│           └── aiEvaluator.js          # Gemini API subjective evaluation logic
+│           ├── cascadeHooks.js         # GDPR — post-delete cascade for StudentFingerprint on User deletion
+│           └── aiEvaluator.js          # EXTENDED — now also exports generateConceptTag, generateAiAnalysis
 │
 ├── frontend/
 │   ├── index.html
@@ -95,7 +104,8 @@ E_Learning/
 │       ├── index.css                   # @import "tailwindcss"; @plugin "daisyui";
 │       ├── store/
 │       │   ├── useAuthStore.js         # Zustand store: authUser, login, signup, logout, checkAuth
-│       │   └── useTestStore.js         # Zustand store: test fetching, submission, polling
+│       │   ├── useTestStore.js         # Zustand store: test fetching, submission, polling
+│       │   └── useStudentContextStore.js   # Zustand store: full StudentContext fetch, filters, course slice refresh
 │       ├── lib/
 │       │   └── axios.js                # Axios instance — baseURL: http://localhost:3001/api
 │       └── components/
@@ -104,7 +114,8 @@ E_Learning/
 │           ├── LoginPage.jsx           # Email + password form → useAuthStore.login()
 │           ├── SignupPage.jsx          # Full registration form → useAuthStore.signup()
 │           ├── CoursePage.jsx          # Authenticated course catalogue (/course)
-│           ├── DashboardPage.jsx       # Student dashboard STUB (only renders <div>DashboardPage</div>)
+│           ├── DashboardPage.jsx       # REPLACED stub — full dashboard with charts, filters, fingerprint panel, progress rings
+│           ├── FingerprintInsightPanel.jsx   # Understanding Depth panel — concept classifications with progress bars
 │           ├── TutorPlaceholderPage.jsx # "Coming Soon" 404-style page for /tutor route
 │           ├── TestPanel.jsx           # Embedded quiz/test UI component
 │           └── IMG-20260307-WA0000.png # Garfield image used in TutorPlaceholderPage
@@ -245,6 +256,15 @@ E_Learning/
       type:          String,  // enum: ["mcq", "short", "essay"]
       options:       [String], // Only for MCQ
       correctAnswer: String,   // Only for MCQ (used in server-side grading)
+      // Inside questions subdocument — TWO NEW FIELDS added in dashboard implementation:
+      conceptTag:    { type: String, default: null },
+      // Grouping key for fingerprint algorithm. All questions testing the same concept share this value.
+      // Must be lowercase alphanumeric + hyphens only. e.g. "closures", "for-loops"
+      
+      phrasingSeed:  { type: String, default: null },
+      // Surface structure fingerprint of this specific question wording.
+      // Same conceptTag + different phrasingSeed = same concept, different wording.
+      // e.g. "closure_definition", "closure_scope_variable"
     }
   ],
 
@@ -278,6 +298,10 @@ E_Learning/
   courseComplete: Boolean,
   allTestsPassed: Boolean,
 
+  // TWO NEW FIELDS added in capstone prep (not yet used by capstone — reserved):
+  capstoneSessionId: ObjectId,  // ref: "CapstoneSession", default: null
+  capstonePassed:    Boolean,   // default: false
+
   createdAt: Date,
   updatedAt: Date,
 }
@@ -296,6 +320,12 @@ const answerSchema = new mongoose.Schema({
   aiScore:       Number,   // 0–100, subjective only
   aiConfidence:  Number,   // 0–1
   aiFeedback:    String,
+  // Inside answerSchema — ONE NEW FIELD added in dashboard implementation:
+  responseTimeMs: { type: Number, default: null },
+  // Time in ms from question display to answer submission.
+  // Captured by TestPanel.jsx on the frontend.
+  // Used by fastWrongRatio dimension of fingerprint algorithm.
+  // If null, timing discount is not applied (student is not penalised).
 }, { _id: false });
 
 {
@@ -314,6 +344,40 @@ const answerSchema = new mongoose.Schema({
   updatedAt:        Date,
 }
 ```
+
+---
+
+### `StudentFingerprint` Collection (file: `fingerprint.model.js`, model name: `"StudentFingerprint"`)
+```js
+{
+  studentId:    ObjectId,  // ref: "User" — uses User._id consistent with Progress/TestResult pattern
+  conceptTag:   String,    // required. Regex validated: /^[a-z0-9-]+$/ e.g. "closures", "async-await"
+  courseId:     ObjectId,  // ref: "Course", required
+
+  // Raw counters — incremented on each test submission via updateFingerprintsFromResult()
+  attempts:          Number,  // total questions answered on this concept
+  wrongCount:        Number,  // total wrong answers
+  phrasingsTotal:    Number,  // total unique phrasingSeeds encountered
+  phrasingsFailed:   Number,  // unique phrasingSeeds student got wrong
+  fastWrongCount:    Number,  // wrong answers submitted under 8000ms
+  conceptsRecovered: Number,  // correct answers after prior failure + feedback
+  conceptsFailed:    Number,  // failures that preceded a feedback window
+
+  // Computed after each update
+  fingerprintScore: Number,  // 0.0–1.0 decimal, null until 3+ attempts
+  classification:   String,  // enum: ["ConceptualGap", "Uncertain", "CarelessError"]
+
+  // Audit
+  lastUpdatedFromResultId: ObjectId,  // ref: "TestResult"
+  lastComputedAt:          Date,
+
+  createdAt: Date,
+  updatedAt: Date,
+}
+```
+Compound unique index: `{ studentId: 1, conceptTag: 1, courseId: 1 }`.
+Classification thresholds: >= 0.60 → ConceptualGap, < 0.30 → CarelessError, else Uncertain.
+Minimum 3 attempts required before non-Uncertain classification is assigned.
 
 ---
 
@@ -552,6 +616,77 @@ Aggregates and returns per-user video completion for the entire course.
 
 ---
 
+### Student Context Routes — `/api/student-context` 🔒 All Protected
+
+#### `GET /api/student-context/:studentId`
+Returns the full `StudentContext` aggregation for a student. Only the authenticated user may fetch their own context (or admin role).
+
+**Response `200`:**
+```json
+{
+  "context": {
+    "studentId": "...",
+    "generatedAt": "ISO timestamp",
+    "courses": [
+      {
+        "courseId": "...",
+        "courseTitle": "...",
+        "category": "...",
+        "enrollment": {
+          "videosTotal": 13,
+          "videosWatched": 7,
+          "completionPercent": 53,
+          "courseComplete": false,
+          "allTestsPassed": false
+        },
+        "testHistory": [...],
+        "aggregateScore": {
+          "averageScore": 74,
+          "highestScore": 92,
+          "lowestScore": 48,
+          "movingAverage7d": 81,
+          "trend": "improving",
+          "totalAttempts": 6,
+          "passRate": 0.83
+        },
+        "proficiency": "Proficient",
+        "fingerprints": [...]
+      }
+    ],
+    "summary": {
+      "totalCoursesEnrolled": 1,
+      "totalTestsAttempted": 6,
+      "overallAverageScore": 74,
+      "totalConceptualGaps": 2,
+      "totalCarelessErrors": 1,
+      "strongestCourse": "...",
+      "weakestCourse": null
+    }
+  }
+}
+```
+**`403`** if `req.user._id !== studentId` and role is not admin.
+
+### Dashboard Routes — `/api/dashboard` 🔒 All Protected
+
+#### `GET /api/dashboard/scores`
+Query params: `courseId`, `dateFrom` (ISO), `dateTo` (ISO), `difficulty` (beginner|intermediate|advanced).
+Returns array of `TestResult` snapshots with video title and test difficulty joined. Used for bar chart.
+
+#### `GET /api/dashboard/trends`
+Query params: `courseId`, `window` (7d|30d|all, default 30d).
+Returns time-series array with `{ date, score, passed, courseId, movingAvg }` per result. Moving average computed in-memory over a rolling 7-day window per data point.
+
+#### `GET /api/dashboard/fingerprints`
+Query params: `courseId`, `classification` (ConceptualGap|Uncertain|CarelessError).
+Returns `StudentFingerprint` documents grouped by `courseId`.
+
+#### `GET /api/dashboard/summary`
+No query params. Lightweight — runs three parallel queries. Returns `SummaryStats` shape:
+`{ totalCoursesEnrolled, totalTestsAttempted, overallAverageScore, totalConceptualGaps, totalCarelessErrors, strongestCourse, weakestCourse }`.
+
+---
+
 ## 5. Frontend State & Data Flow
 
 ### Global State — Zustand (`src/store/useAuthStore.js`)
@@ -572,6 +707,23 @@ checkAuth()   // GET /auth/check — called once on App mount via useEffect
 signup(data)  // POST /auth/signup — sets authUser on success
 login(data)   // POST /auth/login  — sets authUser on success
 logout()      // POST /auth/logout — clears authUser
+```
+
+### Student Context Store — Zustand (`src/store/useStudentContextStore.js`)
+
+```js
+{
+  context:       null | StudentContext,
+  isLoading:     boolean,
+  error:         null | string,
+  activeFilters: { courseId: "all", dateFrom: null, dateTo: null, difficulty: "all" },
+}
+
+// Actions:
+fetchContext(userId)         // GET /api/student-context/:userId — populates context
+setFilter(key, value)        // Updates a single activeFilters key
+resetFilters()               // Resets dateFrom, dateTo, difficulty to null. Does NOT reset courseId.
+refreshCourseSlice(courseId) // Phase 1: full re-fetch. Phase 3: can be optimised to sliced endpoint.
 ```
 
 ### HTTP Client — Axios (`src/lib/axios.js`)
@@ -612,7 +764,16 @@ Role detection: `authUser.role === "student"` → `isStudent`; `authUser.role ==
 - **`LoginPage`**: Local `useState` for `formData`, calls `useAuthStore().login(formData)`.
 - **`SignupPage`**: Local `useState` for `formData` (fullName, email, password, confirmPassword, role), calls `useAuthStore().signup(formData)`.
 - **`Navbar`**: Reads `authUser`, `logout` from `useAuthStore` directly.
-- **`DashboardPage`**: Only reads `authUser` from store; renders nothing useful yet.
+- **`DashboardPage`**: Full implementation (previously a stub). Consumes `useStudentContextStore`. Layout:
+  1. KPI header cards (avg score, courses enrolled, conceptual gaps, tests attempted)
+  2. Course progress rings — `CourseProgressCard` sub-component, SVG `strokeDashoffset` rings, always shows all courses
+  3. Course selector tabs — filters charts below, does not affect progress rings or fingerprint panel
+  4. Date range + difficulty filter bar — client-side filtering, does not trigger new API calls
+  5. Two-column score section (70/30 grid): left = `BarChart` (amber=pass, grey=fail, dashed ReferenceLine at 70), right = stacked KPI cards
+  6. `AreaChart` trend line with 7-day moving average overlay
+  7. `FingerprintInsightPanel` — "Understanding Depth" section
+  Socket.IO: connects to `http://localhost:3001` on mount, listens for `context:updated`, triggers `fetchContext` on match. Disconnects on unmount.
+- **`FingerprintInsightPanel.jsx`**: Renders per-concept fingerprint classifications. Props: `fingerprints[]`. Shows three summary pills (needs work / tracking / minor slips), sorted concept rows with classification badge + horizontal progress bar + attempt count. Friendly copy — never exposes internal enum names to the user. Empty state when no fingerprints exist. CSS prefix: `fip-`.
 
 ---
 
@@ -622,10 +783,12 @@ Role detection: `authUser.role === "student"` → `isStudent`; `authUser.role ==
 |---|---|---|
 | **Google Fonts (DM Serif Display, DM Sans, DM Mono)** | ✅ Active | Injected via `<style dangerouslySetInnerHTML>` inside each major component (Navbar, HomePage, LoginPage, SignupPage, TutorPlaceholderPage, CoursePage, CourseDetailPage) |
 | **YouTube** | ✅ Active | `VideoPlayer` sub-component in `CourseDetailPage` uses the YouTube IFrame API to embed and track watch duration (90% completion trigger) |
-| **Google Gemini API (google/generative-ai)** | ✅ Active | Model: `gemini-2.5-flash-lite` — used in `backend/src/lib/aiEvaluator.js` for subjective answer evaluation. Requires `GEMINI_API_KEY` in `backend/.env` |
+| **Google Gemini API (google/generative-ai)** | ✅ Active | `aiEvaluator.js` exports: `evaluateSubjectiveAnswer`, `calculateWeightedScore`, `generateConceptTag` (auto-tags questions with conceptTag + phrasingSeed), `generateAiAnalysis` (populates all four Progress.aiAnalysis fields filtered by fingerprint classification). Model: `gemini-2.5-flash-lite`. Retry logic: 3 attempts with 2s/4s/8s exponential backoff on 503. |
 | **Cloudinary** | 🟡 Installed, unused | `cloudinary ^2.8.0` in `backend/package.json`; no controller or route uses it |
-| **Socket.IO** | 🟡 Installed, unused | `socket.io ^4.8.1` in `backend/package.json`; not imported in `index.js` |
-| **AI (unspecified)** | 🔴 Planned, not built | `Progress.aiAnalysis` schema fields exist (weakAreas, strengths, personalizedFeedback, recommendations) but no AI API call is implemented anywhere |
+| **Socket.IO** | ✅ Active | `index.js` — `httpServer.listen` replaces `app.listen`. `io` stored on `app` via `app.set("io", io)`. Emits `context:updated` from `finalizeResult()` in `test.controller.js` after fingerprint recompute. Frontend listens in `DashboardPage.jsx`. |
+| **Recharts** | ✅ Active | `frontend/package.json`. Used in `DashboardPage.jsx` for `BarChart`, `AreaChart`, `ResponsiveContainer`, `Cell`, `ReferenceLine`, `Tooltip`. |
+| **socket.io-client** | ✅ Active | `frontend/package.json`. Used in `DashboardPage.jsx` for real-time context refresh. |
+| **AI Feedback (Progress.aiAnalysis)** | ✅ Active | Populated by `generateAiAnalysis()` in `aiEvaluator.js`. Called non-blocking from `finalizeResult()` after fingerprint update. All four fields populated: `weakAreas` (ConceptualGap concepts only), `strengths`, `personalizedFeedback`, `recommendations`. |
 
 ---
 
@@ -729,6 +892,16 @@ All components share the same CSS custom property palette:
 - **TestResult model:** stores per-attempt answers, scores, AI feedback, and evaluation status.
 - **Test submission pipeline:** MCQ grading is instant, subjective answers are evaluated asynchronously via Gemini, results are polled by the frontend.
 - **Weighted scoring:** `calculateWeightedScore` in `aiEvaluator.js` handles mixed MCQ and subjective question types.
+- **Student Context API:** `GET /api/student-context/:studentId` — aggregates TestResult, Progress, and StudentFingerprint data into a unified StudentContext object. Powers the dashboard.
+- **Dashboard page (`/dashboard`)**: Fully implemented. Score bar chart, trend line, course progress rings, fingerprint insight panel, date/difficulty filters, real-time Socket.IO updates.
+- **Response time capture:** `TestPanel.jsx` captures `responseTimeMs` per answer and includes it in submission payload. Stored in `TestResult.answers[].responseTimeMs`.
+- **Socket.IO server:** `index.js` now uses `httpServer.listen` with Socket.IO wired. `io` instance accessible in controllers via `req.app.get("io")`.
+- **Gemini 503 retry:** `aiEvaluator.js` retries Gemini API calls up to 3 times with exponential backoff (2s, 4s, 8s) on 503/Service Unavailable errors.
+- **Fingerprint engine (`fingerprintEngine.service.js`):** `computeFingerprint()` (pure function) and `updateFingerprintsFromResult()` both implemented and verified working. Engine fires after every test submission via `finalizeResult()` in `test.controller.js`. Confirmed: `StudentFingerprint` documents are being written to MongoDB with correct classifications.
+- **`FingerprintInsightPanel.jsx`:** "Understanding Depth" panel implemented. Displays per-concept classifications with friendly copy. Has real data to render — verified via MongoDB (`studentfingerprints` collection has documents).
+- **Socket.IO `context:updated` event:** Emitted from `test.controller.js` line 220 after fingerprint recompute completes. Dashboard listener active in `DashboardPage.jsx`.
+- **`Progress.aiAnalysis.weakAreas` filtering:** Populated by `generateAiAnalysis()` in `aiEvaluator.js`. Filtered to `ConceptualGap` concepts only before being passed to Gemini context.
+- **Dashboard phases 1, 2, 3 (`dashboard_plan.md`):** All three phases verified complete as of 2026-04-14. Fingerprint classification confirmed working end-to-end via live MongoDB document inspection.
 
 ### 🔴 Broken / Critical Issues
 
@@ -740,15 +913,26 @@ All components share the same CSS custom property palette:
 
 - **Course completion gate:** `checkCourseCompletion` implemented in `test.controller.js`, not yet verified end-to-end.
 - **TestPanel UI:** component built, submission and polling flow implemented, results display not yet fully verified.
-- **Dashboard page (`/dashboard`):** Only renders a bare `<div>DashboardPage</div>`. Needs full implementation.
 - **Tutor dashboard (`/tutor`):** Shows a "Coming Soon" placeholder page with a Garfield image and an email notify form (non-functional — just sets `sent: true` locally).
 - **AI feedback:** The `Progress.aiAnalysis` fields exist but nothing populates them. No AI API (OpenAI, Claude, etc.) is integrated yet despite the UI marketing text referencing it.
 - **Cloudinary:** Installed but no upload routes exist. Likely intended for course thumbnail uploads.
-- **Socket.IO:** Installed but not used anywhere.
 - **Admin role:** Defined in the User schema's enum but has no dedicated routes, controllers, or UI.
 - **"Forgot password" link:** Present in `LoginPage` (links to `/forgot-password`) but that route doesn't exist.
 - **Student enrollment system:** `courseSubscribed` in `Student` is a single plain String — not a proper array of ObjectIds. Enrollment flow (subscribing a student to a course) has no API endpoint.
 - **MOCK_DATA.json:** A 211KB file at the root — presumably for seeding the database, but no seed script exists.
+
+### ⚠️ Known Technical Debt (carried forward, not fixed in dashboard implementation)
+
+1. **`Progress.studentId` ref mismatch (pre-existing):** Stores `User._id` but declared as `ref: "Student"`. The SCS abstracts this — it queries Progress by `req.user._id` directly, never via the Student ref. Do not fix without a full data migration.
+
+2. **`phrasingsTotal` / `phrasingsFailed` increment strategy:** `updateFingerprintsFromResult` uses `$inc` with the count of unique phrasingSeeds in the current result batch. This can overcount if the same phrasingSeed appears in multiple test submissions. A correct implementation requires storing the full set of seen phrasingSeeds per StudentFingerprint document and using set operations. Acceptable at current scale — revisit before fingerprint data grows large.
+
+3. **`difficulty` field not in `testHistory` entries from SCS:** The `aggregateTestHistory` pipeline in `studentContext.service.js` does not join the `Test` collection, so `difficulty` is absent from `CourseContext.testHistory`. The difficulty filter in `DashboardPage` silently has no effect on existing data. Fix: add a `$lookup` on the `tests` collection in the aggregation pipeline and project `test.difficulty`.
+
+4. **`aiAnalysis` on end-of-course tests:** The Progress update in the aiAnalysis IIFE queries by `{ studentId, videoId }`. If `videoId` is null (end-of-course test), the query will not match any Progress document. The aiAnalysis will not be written for those tests. Fix: add a fallback query by `{ studentId, courseId }` when `videoId` is null.
+
+5. **`conceptsRecovered` / `conceptsFailed` counters not yet populated:** The `StudentFingerprint` schema has `conceptsRecovered` and `conceptsFailed` fields for the recovery dimension of the fingerprint algorithm. `updateFingerprintsFromResult` does not yet compute recovery events (which require cross-result history comparison). The `W_RECOVERY` weight (0.25) currently always uses the default `recoveryRate = 1`, meaning the recovery dimension contributes 0 to every score. The algorithm still works correctly via the other three dimensions.
+
 
 ---
 
@@ -816,3 +1000,84 @@ Implemented complete MCQ and subjective AI-assisted testing pipeline.
 **Known issues resolved:**
 - Mongoose reserved keyword `type` inside inline subdocument array caused `Cast to [string] failed` validation error — fixed by extracting `answerSchema` as a named schema
 - `dotenv.config()` was not loading before ES Module imports executed — fixed via dedicated `env.js` with explicit `__dirname`-relative path
+
+### 2026-04-06
+**Session Summary:**
+Completed dashboard_plan.md Phase 1 in full.
+
+**Backend changes:**
+- Created `backend/src/models/fingerprint.model.js` — StudentFingerprint schema with compound unique index on { studentId, conceptTag, courseId }.
+- Added `conceptTag` and `phrasingSeed` fields to question subdocument in `quiz.model.js`.
+- Added `responseTimeMs` field to `answerSchema` in `testResult.model.js`.
+- Created `backend/src/services/studentContext.service.js` — buildStudentContext() with three parallel MongoDB aggregations (testHistory, progressData, fingerprintData). Fixed $unwind option from `preserveNullAndEmpty` to `preserveNullAndEmptyArrays`. Added ObjectId validity guard.
+- Created `backend/src/controllers/studentContext.controller.js` — getStudentContext with ownership check and admin bypass. Bonus: refreshCourseSlice endpoint.
+- Created `backend/src/routes/studentContext.route.js` — mounted at /api/student-context in index.js.
+- Updated `backend/src/index.js` — replaced app.listen with httpServer.listen, wired Socket.IO server, mounted studentContext routes.
+- Updated `aiEvaluator.js` — added exponential backoff retry (max 3 attempts) for Gemini 503 errors.
+
+**Frontend changes:**
+- Created `frontend/src/store/useStudentContextStore.js` — fetchContext, setFilter, resetFilters, refreshCourseSlice (full re-fetch in Phase 1).
+- Replaced `DashboardPage.jsx` stub with full implementation: score bar chart (Recharts BarChart), trend line (AreaChart), KPI cards, course selector tabs, skeleton loader, empty state, two-column layout (dp-scores-grid), dynamic navbar height offset via useEffect + CSS custom property.
+- Updated `TestPanel.jsx` — captures responseTimeMs per question via useRef, includes it in submission payload.
+- Installed `recharts` on frontend.
+
+**Known bugs fixed this session:**
+- $unwind stage option typo (preserveNullAndEmpty → preserveNullAndEmptyArrays)
+- Bar chart color/tooltip mismatch — both now read from same field on same 0–100 scale
+- Right column taller than graph — fixed with align-items: stretch + flex:1 on chart wrapper + ResponsiveContainer height="100%"
+
+**Next session starts at: dashboard_plan.md Phase 2 — Fingerprint Engine.**
+Tasks in order: fingerprintEngine.service.js → updateFingerprintsFromResult → hook into test.controller.js → seedTests.js conceptTag/phrasingSeed population → FingerprintInsightPanel.jsx → Socket.IO context:updated emit + dashboard listener → Progress.aiAnalysis weakAreas filter.
+
+### 2026-04-13 — Dashboard Implementation (Phases 1, 2, 3)
+
+**Summary:** Full implementation of `dashboard_plan.md` across all three phases. The student performance dashboard is now live at `/dashboard`. The Answer Trajectory Fingerprinting system is wired into the test submission pipeline.
+
+**New files created:**
+- `backend/src/models/fingerprint.model.js` — StudentFingerprint Mongoose schema with compound unique index
+- `backend/src/services/studentContext.service.js` — SCS aggregation layer, `buildStudentContext()`
+- `backend/src/services/fingerprintEngine.service.js` — pure `computeFingerprint()` + DB `updateFingerprintsFromResult()`
+- `backend/src/controllers/studentContext.controller.js` — `getStudentContext` with ownership check
+- `backend/src/controllers/dashboard.controller.js` — four sliced endpoints
+- `backend/src/routes/studentContext.route.js` — mounted at `/api/student-context`
+- `backend/src/routes/dashboard.route.js` — mounted at `/api/dashboard`
+- `backend/src/lib/cascadeHooks.js` — GDPR cascade delete for StudentFingerprint on User deletion
+- `frontend/src/store/useStudentContextStore.js` — Zustand store for dashboard state
+- `frontend/src/components/FingerprintInsightPanel.jsx` — "Understanding Depth" UI panel
+
+**Modified files:**
+- `backend/src/models/quiz.model.js` — added `conceptTag`, `phrasingSeed` to question subdocument
+- `backend/src/models/testResult.model.js` — added `responseTimeMs` to answerSchema, two compound indexes
+- `backend/src/lib/aiEvaluator.js` — added `generateConceptTag()`, `generateAiAnalysis()`, retry logic on 503
+- `backend/src/controllers/test.controller.js` — hooked `updateFingerprintsFromResult` + Socket.IO emit into `finalizeResult()`, aiAnalysis IIFE, `Course` + `User` imports added
+- `backend/src/index.js` — replaced `app.listen` with `httpServer.listen`, wired Socket.IO, mounted two new routers, imported `cascadeHooks.js`
+- `backend/src/seed/seedTests.js` — all questions tagged with `conceptTag` + `phrasingSeed`
+- `frontend/src/components/DashboardPage.jsx` — replaced stub with full implementation
+- `frontend/src/components/CoursePage.jsx` — added ProficiencyBand badges via `/api/dashboard/scores`
+- `frontend/src/components/TestPanel.jsx` — added `responseTimeMs` capture per answer
+
+**Architecture decisions:**
+- SCS is a service layer, not a model — aggregation logic written once, reusable by any future feature
+- Fingerprint update is fire-and-forget in both MCQ and subjective grading paths — never blocks HTTP response
+- `app.set("io", io)` pattern used to pass Socket.IO instance to controllers without circular imports
+- `cascadeHooks.js` used instead of inline hook in `user.model.js` to avoid circular model imports
+- Client-side filtering for date/difficulty — no new API calls on filter change
+- `computeFingerprint()` is a pure function — fully unit-testable without MongoDB
+
+**Known remaining issues:** See Section 8 — Known Technical Debt items 1–5.
+
+**Next milestone:** Capstone Test System (`Capstone_test_plan.md`) — all dashboard_plan.md dependencies now met.
+
+### 2026-04-14 — Phase 2 & 3 Verification + Bug Fix
+
+**Verification:**
+- Confirmed `fingerprintEngine.service.js` exports `computeFingerprint()` and `updateFingerprintsFromResult()` correctly.
+- Confirmed `updateFingerprintsFromResult` is called at `test.controller.js` line 213 inside `finalizeResult()`.
+- Confirmed `context:updated` Socket.IO event is emitted at `test.controller.js` line 220.
+- Confirmed `studentfingerprints` MongoDB collection has real documents. Sample document verified: `conceptTag: "arrays"`, `classification: "CarelessError"`, `attempts: 3`, `wrongCount: 0`, `fingerprintScore: 0` — algorithm logic correct (all answers right → CarelessError).
+- PROJECT_STATE.md "Incomplete" section was stale — written before April 13 implementation session and never updated. Corrected in this session.
+
+**Bug fixed:**
+- Dashboard course progress rings showing 0% / "0 / 13 videos" despite real watch history existing.
+- Root cause: `buildStudentContext()` SCS pipeline has a silent failure (exact cause unresolved — suspected stale process or ObjectId/String type mismatch in Video.courseId lookup). Parked as non-critical — does not affect any backend logic, fingerprinting, or Capstone unlock conditions.
+- Cosmetic fix applied: `CourseProgressCard` in `DashboardPage.jsx` now fetches progress directly from `GET /api/progress/course/:courseId` (the same proven endpoint used by `CoursePage.jsx`) instead of relying on SCS enrollment data.

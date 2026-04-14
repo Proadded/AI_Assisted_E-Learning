@@ -10,6 +10,7 @@ const answerSchema = new mongoose.Schema({
     aiScore: { type: Number },
     aiConfidence: { type: Number },
     aiFeedback: { type: String },
+    responseTimeMs: { type: Number, default: null },
 }, { _id: false });
 
 const testResultSchema = new mongoose.Schema({
@@ -30,6 +31,16 @@ const testResultSchema = new mongoose.Schema({
     },
     // createdAt removed — timestamps: true handles both createdAt and updatedAt automatically
 }, { timestamps: true });
+
+testResultSchema.index(
+    { studentId: 1, courseId: 1, evaluationStatus: 1 },
+    { background: true }
+);
+
+testResultSchema.index(
+    { studentId: 1, courseId: 1, createdAt: -1 },
+    { background: true }
+);
 
 const TestResult = mongoose.model("TestResult", testResultSchema);
 export default TestResult;

@@ -12,6 +12,8 @@ const testSchema = new mongoose.Schema({
         type: { type: String, enum: ["mcq", "short_answer", "essay"] },
         options: [String],       // MCQ only
         correctAnswer: String,   // MCQ only
+        conceptTag: { type: String, default: null },
+        phrasingSeed: { type: String, default: null },
         rubric: String,          // Subjective: grading criteria sent to AI
         maxScore: { type: Number, default: 100 },
         weight: { type: Number, default: 1 }, // relative weight in final score

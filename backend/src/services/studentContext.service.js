@@ -14,6 +14,7 @@ import TestResult from "../models/testResult.model.js";
 import Progress from "../models/progress.model.js";
 import StudentFingerprint from "../models/fingerprint.model.js";
 import Course from "../models/course.model.js";
+import Video from "../models/video.model.js";
 
 const ObjectId = mongoose.Types.ObjectId;
 
@@ -25,55 +26,116 @@ const ObjectId = mongoose.Types.ObjectId;
  * @returns {Promise<StudentContext>}
  */
 export async function buildStudentContext(userId) {
-  const uid = new ObjectId(userId);
+  process.stdout.write("[SCS] SYNC CHECK\n");
+  console.log("[SCS] buildStudentContext ENTERED with:", userId, typeof userId);
 
-  // Run all three aggregations concurrently
-  const [testHistory, progressMap, fingerprintMap] = await Promise.all([
-    aggregateTestHistory(uid),
-    aggregateProgressData(uid),
-    aggregateFingerprintData(uid),
-  ]);
+  try {
+    if (!userId || !mongoose.Types.ObjectId.isValid(userId)) {
+      throw new Error(`Invalid userId: ${userId}`);
+    }
+    const uid = new ObjectId(userId);
 
-  // Collect all unique courseIds seen across test history and progress
-  const courseIdSet = new Set([
-    ...testHistory.map((r) => r.courseId?.toString()),
-    ...Object.keys(progressMap),
-  ].filter(Boolean));
+    // Run all three aggregations concurrently
+    const [testHistory, progressMap, fingerprintMap] = await Promise.all([
+      aggregateTestHistory(uid),
+      aggregateProgressData(uid),
+      aggregateFingerprintData(uid),
+    ]);
 
-  if (!courseIdSet.size) {
-    return buildEmptyContext(userId);
-  }
+    console.log("[SCS] testHistory courseIds:", testHistory.map(r => r.courseId?.toString()));
 
-  const courses = await Course.find({
-    _id: { $in: [...courseIdSet].map((id) => new ObjectId(id)) },
-  })
-    .select("_id title category videoCount")
-    .lean();
+    // Cast to ObjectId explicitly — Progress.studentId stores an ObjectId
+    const watchedProgress = await Progress.find(
+      { studentId: new ObjectId(userId), watched: true },
+      { videoId: 1 }
+    ).lean();
 
-  const courseContexts = courses.map((course) => {
-    const cid = course._id.toString();
-    const tests = testHistory.filter((t) => t.courseId?.toString() === cid);
-    const progress = progressMap[cid] || null;
-    const fingerprints = fingerprintMap[cid] || [];
+
+    console.log("[SCS] watchedProgress count:", watchedProgress.length);
+    console.log("[SCS] watchedProgress sample:", JSON.stringify(watchedProgress[0]));
+
+    const watchedVideoIds = watchedProgress.map(p => p.videoId);
+
+    const watchedVideos = await Video.find(
+      { _id: { $in: watchedVideoIds } },
+      { courseId: 1 }
+    ).lean();
+
+    console.log("[SCS] watchedVideos count:", watchedVideos.length);
+    console.log("[SCS] watchedVideos sample:", JSON.stringify(watchedVideos[0]));
+
+    // Video.courseId is stored as a plain String — toString() both sides
+    const progressCourseIds = watchedVideos
+      .map(v => v.courseId?.toString())
+      .filter(Boolean);
+
+    // Merge with testHistory courseIds — deduplicate
+    const allCourseIds = [
+      ...new Set([
+        ...testHistory.map((r) => r.courseId?.toString()),
+        ...progressCourseIds,
+      ])
+    ].filter(Boolean);
+
+    console.log("[SCS] allCourseIds:", allCourseIds);
+
+    if (!allCourseIds.length) {
+      return buildEmptyContext(userId);
+    }
+
+    const courses = await Course.find({
+      _id: { 
+        $in: allCourseIds
+          .filter(id => mongoose.Types.ObjectId.isValid(id))
+          .map((id) => new ObjectId(id)) 
+      },
+    })
+      .select("_id title category videoCount")
+      .lean();
+
+    console.log("[SCS] courses found:", courses.map(c => ({ id: c._id.toString(), title: c.title })));
+
+    const courseContexts = await Promise.all(courses.map(async (course) => {
+      const cid = course._id.toString();
+      const tests = testHistory.filter((t) => t.courseId?.toString() === cid);
+      
+      // Video.courseId is a plain String — compare against cid (already a string)
+      const courseVideos = await Video.find({ courseId: cid }, { _id: 1 }).lean();
+      const courseVideoIds = courseVideos.map(v => v._id.toString());
+
+      console.log(`[SCS] course "${course.title}" — courseVideoIds count: ${courseVideoIds.length}`);
+
+      const progress = progressMap["all"] || [];
+      const fingerprints = fingerprintMap[cid] || [];
+
+      const watchedCount = progress.filter(
+        p => p.watched === true && courseVideoIds.includes(p.videoId?.toString())
+      ).length;
+      console.log(`[SCS] course "${course.title}" — watchedCount: ${watchedCount}, progress pool size: ${progress.length}`);
+
+      return {
+        courseId:       cid,
+        courseTitle:    course.title,
+        category:       course.category || "General",
+        enrollment:     buildEnrollment(progress, course, courseVideoIds),
+        testHistory:    tests,
+        aggregateScore: computeScoreAggregate(tests),
+        proficiency:    computeProficiency(tests),
+        fingerprints,
+      };
+    }));
+
 
     return {
-      courseId:       cid,
-      courseTitle:    course.title,
-      category:       course.category || "General",
-      enrollment:     buildEnrollment(progress, course),
-      testHistory:    tests,
-      aggregateScore: computeScoreAggregate(tests),
-      proficiency:    computeProficiency(tests),
-      fingerprints,
+      studentId:   userId,
+      generatedAt: new Date().toISOString(),
+      courses:     courseContexts,
+      summary:     buildSummaryStats(courseContexts),
     };
-  });
-
-  return {
-    studentId:   userId,
-    generatedAt: new Date().toISOString(),
-    courses:     courseContexts,
-    summary:     buildSummaryStats(courseContexts),
-  };
+  } catch (err) {
+    console.error("[SCS INTERNAL ERROR]:", err);
+    throw err;
+  }
 }
 
 /**
@@ -84,6 +146,8 @@ export async function buildStudentContext(userId) {
  * @returns {Promise<CourseContext>}
  */
 export async function refreshCourseContext(userId, courseId) {
+  if (!userId || !mongoose.Types.ObjectId.isValid(userId)) throw new Error(`Invalid userId: ${userId}`);
+  if (!courseId || !mongoose.Types.ObjectId.isValid(courseId)) throw new Error(`Invalid courseId: ${courseId}`);
   const uid = new ObjectId(userId);
   const cid = new ObjectId(courseId);
 
@@ -109,7 +173,11 @@ export async function refreshCourseContext(userId, courseId) {
   if (!course) return null;
 
   const progressMap = buildProgressMap(progressDocs);
-  const progress = progressMap[courseId] || null;
+  const progress = progressMap["all"] || [];
+  
+  const courseVideos = await Video.find({ courseId: cid.toString() }, { _id: 1 }).lean();
+  const courseVideoIds = courseVideos.map(v => v._id.toString());
+
   const formattedTests = tests.map(formatTestSnapshot);
   const formattedFingerprints = fingerprints.map(formatFingerprintSummary);
 
@@ -117,7 +185,7 @@ export async function refreshCourseContext(userId, courseId) {
     courseId,
     courseTitle:    course.title,
     category:       course.category || "General",
-    enrollment:     buildEnrollment(progress, course),
+    enrollment:     buildEnrollment(progress, course, courseVideoIds),
     testHistory:    formattedTests,
     aggregateScore: computeScoreAggregate(formattedTests),
     proficiency:    computeProficiency(formattedTests),
@@ -128,45 +196,50 @@ export async function refreshCourseContext(userId, courseId) {
 // ─── Aggregation pipelines ────────────────────────────────────────────────────
 
 async function aggregateTestHistory(uid) {
-  const results = await TestResult.aggregate([
-    {
-      $match: {
-        studentId: uid,
-        evaluationStatus: "complete",
+  try {
+    const results = await TestResult.aggregate([
+      {
+        $match: {
+          studentId: uid,
+          evaluationStatus: "complete",
+        },
       },
-    },
-    { $sort: { createdAt: 1 } },
-    {
-      $lookup: {
-        from: "videos",
-        localField: "videoId",
-        foreignField: "_id",
-        as: "video",
+      { $sort: { createdAt: 1 } },
+      {
+        $lookup: {
+          from: "videos",
+          localField: "videoId",
+          foreignField: "_id",
+          as: "video",
+        },
       },
-    },
-    {
-      $unwind: {
-        path: "$video",
-        preserveNullAndEmpty: true,
+      {
+        $unwind: {
+          path: "$video",
+          preserveNullAndEmptyArrays: true,
+        },
       },
-    },
-    {
-      $project: {
-        courseId:         1,
-        videoId:          1,
-        videoTitle:       "$video.title",
-        testId:           1,
-        attemptNumber:    1,
-        totalScore:       1,
-        passed:           1,
-        evaluationStatus: 1,
-        difficulty:       1,
-        createdAt:        1,
+      {
+        $project: {
+          courseId:         1,
+          videoId:          1,
+          videoTitle:       "$video.title",
+          testId:           1,
+          attemptNumber:    1,
+          totalScore:       1,
+          passed:           1,
+          evaluationStatus: 1,
+          difficulty:       1,
+          createdAt:        1,
+        },
       },
-    },
-  ]);
+    ]);
 
-  return results.map(formatTestSnapshot);
+    return results.map(formatTestSnapshot);
+  } catch (error) {
+    console.error("aggregateTestHistory threw an error:", error);
+    throw error;
+  }
 }
 
 async function aggregateProgressData(uid) {
@@ -205,17 +278,22 @@ function buildProgressMap(progressDocs) {
   }, {});
 }
 
-function buildEnrollment(progressRecords, course) {
-  const watched = progressRecords
-    ? (Array.isArray(progressRecords) ? progressRecords : []).filter((p) => p.watched).length
-    : 0;
+function buildEnrollment(rawProgress, course, courseVideoIds) {
+  const progressRecords = rawProgress || [];
+
+  const watched = progressRecords.filter(
+    (p) => p.watched === true && courseVideoIds.includes(p.videoId?.toString())
+  ).length;
+
+  const courseComplete = progressRecords.some(
+    (p) => p.courseComplete && courseVideoIds.includes(p.videoId?.toString())
+  );
+
+  const allTestsPassed = progressRecords.some(
+    (p) => p.allTestsPassed && courseVideoIds.includes(p.videoId?.toString())
+  );
+
   const total = course.videoCount || 0;
-  const courseComplete = progressRecords
-    ? (Array.isArray(progressRecords) ? progressRecords : []).some((p) => p.courseComplete)
-    : false;
-  const allTestsPassed = progressRecords
-    ? (Array.isArray(progressRecords) ? progressRecords : []).some((p) => p.allTestsPassed)
-    : false;
 
   return {
     enrolledAt:        null, // Not tracked in current schema — placeholder for Phase 3

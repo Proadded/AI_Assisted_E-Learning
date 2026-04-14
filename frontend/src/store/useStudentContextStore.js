@@ -11,6 +11,7 @@
 
 import { create } from "zustand";
 import axiosInstance from "../lib/axios.js";
+import useAuthStore from "./useAuthStore.js";
 
 const DEFAULT_FILTERS = {
   courseId:   "all",   // "all" or a specific courseId string
@@ -56,36 +57,11 @@ const useStudentContextStore = create((set, get) => ({
    * @param {string} userId
    * @param {string} courseId
    */
-  refreshCourseSlice: async (userId, courseId) => {
-    if (!userId || !courseId) return;
-
-    try {
-      const res = await axiosInstance.get(
-        `/student-context/${userId}/course/${courseId}/refresh`
-      );
-      const updatedCourse = res.data.courseContext;
-
-      set((state) => {
-        if (!state.context) return {};
-
-        const updatedCourses = state.context.courses.map((c) =>
-          c.courseId === courseId ? updatedCourse : c
-        );
-
-        // If the course wasn't in the list yet (first test taken), append it
-        const found = updatedCourses.some((c) => c.courseId === courseId);
-        if (!found) updatedCourses.push(updatedCourse);
-
-        return {
-          context: {
-            ...state.context,
-            courses:     updatedCourses,
-            generatedAt: new Date().toISOString(),
-          },
-        };
-      });
-    } catch (err) {
-      console.error("Failed to refresh course slice:", err);
+  refreshCourseSlice: async (courseId) => {
+    // For Phase 1, implement as a full re-fetch (targeted slicing is a Phase 3 optimisation)
+    const userId = useAuthStore.getState().authUser?._id;
+    if (userId) {
+      await get().fetchContext(userId);
     }
   },
 

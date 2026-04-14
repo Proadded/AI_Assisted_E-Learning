@@ -1,7 +1,11 @@
 import Test from "../models/quiz.model.js";
 import Progress from "../models/progress.model.js";
 import TestResult from "../models/testResult.model.js";
-import { evaluateSubjectiveAnswer, calculateWeightedScore } from "../lib/aiEvaluator.js";
+import StudentFingerprint from "../models/fingerprint.model.js";
+import Course from "../models/course.model.js";
+import User from "../models/user.model.js";
+import { evaluateSubjectiveAnswer, calculateWeightedScore, generateAiAnalysis } from "../lib/aiEvaluator.js";
+import { updateFingerprintsFromResult } from "../services/fingerprintEngine.service.js";
 
 export const getTest = async (req, res) => {
     try {
@@ -74,11 +78,13 @@ export const submitTest = async (req, res) => {
             evaluationStatus,
         });
 
+        const io = req.app.get("io");
+
         if (hasSubjective) {
             // Fire-and-forget — AI evaluation runs in the background
-            evaluateSubjectiveAnswersAsync(result, test);
+            evaluateSubjectiveAnswersAsync(result, test, io);
         } else {
-            await finalizeResult(result, test);
+            await finalizeResult(result, test, io);
         }
 
         const message = hasSubjective
@@ -99,7 +105,7 @@ export const submitTest = async (req, res) => {
 
 // ─── Internal helpers (not exported) ────────────────────────────────────────
 
-async function evaluateSubjectiveAnswersAsync(result, test) {
+async function evaluateSubjectiveAnswersAsync(result, test, io) {
     try {
         for (const answer of result.answers) {
             if (answer.aiScore !== null) continue;
@@ -121,7 +127,7 @@ async function evaluateSubjectiveAnswersAsync(result, test) {
         }
 
         await result.save();
-        await finalizeResult(result, test);
+        await finalizeResult(result, test, io);
     } catch (error) {
         console.log("Error in evaluateSubjectiveAnswersAsync:", error.message);
         result.evaluationStatus = "failed";
@@ -129,7 +135,7 @@ async function evaluateSubjectiveAnswersAsync(result, test) {
     }
 }
 
-async function finalizeResult(result, test) {
+async function finalizeResult(result, test, io) {
     const totalScore = calculateWeightedScore(result.answers, test.questions);
 
     result.totalScore = totalScore;
@@ -147,12 +153,81 @@ async function finalizeResult(result, test) {
         { upsert: true }
     );
 
+    // Populate all four aiAnalysis fields via Gemini — non-blocking, never affects HTTP response
+    (async () => {
+        try {
+            // Fetch current fingerprint classifications for this student + course
+            const fingerprints = await StudentFingerprint.find({
+                studentId: result.studentId,
+                courseId:  result.courseId,
+            }).select("conceptTag classification").lean();
+
+            const conceptualGaps    = fingerprints.filter(f => f.classification === "ConceptualGap").map(f => f.conceptTag);
+            const uncertainConcepts = fingerprints.filter(f => f.classification === "Uncertain").map(f => f.conceptTag);
+
+            // Fetch recent test history for context
+            const recentResults = await TestResult.find({
+                studentId:        result.studentId,
+                courseId:         result.courseId,
+                evaluationStatus: "complete",
+            }).select("totalScore createdAt").sort({ createdAt: -1 }).limit(10).lean();
+
+            // Fetch course title and student name for the prompt
+            const [course, student] = await Promise.all([
+                Course.findById(result.courseId).select("title").lean(),
+                User.findById(result.studentId).select("fullName").lean(),
+            ]);
+
+            const aiAnalysis = await generateAiAnalysis({
+                studentName:     student?.fullName || "Student",
+                courseTitle:     course?.title || "this course",
+                conceptualGaps,
+                uncertainConcepts,
+                testHistory:     recentResults.reverse(), // chronological order
+            });
+
+            if (aiAnalysis) {
+                await Progress.findOneAndUpdate(
+                    { studentId: result.studentId, videoId: result.videoId },
+                    {
+                        $set: {
+                            "aiAnalysis.weakAreas":            aiAnalysis.weakAreas,
+                            "aiAnalysis.strengths":            aiAnalysis.strengths,
+                            "aiAnalysis.personalizedFeedback": aiAnalysis.personalizedFeedback,
+                            "aiAnalysis.recommendations":      aiAnalysis.recommendations,
+                        }
+                    }
+                );
+                console.log(`aiAnalysis updated for student ${result.studentId}, course ${result.courseId}`);
+            }
+        } catch (err) {
+            console.log("aiAnalysis population failed (non-critical):", err.message);
+        }
+    })();
+
     if (result.courseId) {
-        await checkCourseCompletion(result.studentId, result.courseId);
+        await checkCourseCompletion(result.studentId, result.courseId, io);
+    }
+
+    // Fire-and-forget fingerprint update — must never break the submission response
+    updateFingerprintsFromResult(result).catch(err =>
+        console.log("Fingerprint update failed (non-critical):", err.message)
+    );
+
+    // Notify dashboard to refresh in real-time
+    try {
+        if (io) {
+            io.emit("context:updated", {
+                studentId: result.studentId.toString(),
+                courseId:  result.courseId.toString(),
+            });
+        }
+    } catch (e) {
+        console.log("Socket emit failed (non-critical):", e.message);
     }
 }
 
-async function checkCourseCompletion(studentId, courseId) {
+async function checkCourseCompletion(studentId, courseId, io) {
     const allTests = await Test.find({ courseId });
     const allResults = await TestResult.find({ studentId, courseId });
 
@@ -167,6 +242,13 @@ async function checkCourseCompletion(studentId, courseId) {
             { studentId, courseId },
             { allTestsPassed: true, courseComplete: true }
         );
+
+        if (io) {
+            io.emit("capstone:unlocked", {
+                courseId: courseId.toString(),
+                studentId: studentId.toString(),
+            });
+        }
     }
 }
 

@@ -26,6 +26,8 @@ const progressSchema = new mongoose.Schema({
     },
 
     testResultId: { type: ObjectId, ref: "TestResult" },
+    jscapstoneSessionId: { type: mongoose.Schema.Types.ObjectId, ref: "CapstoneSession", default: null },
+    capstonePassed: { type: Boolean, default: false },
     courseComplete: { type: Boolean, default: false },
     allTestsPassed: { type: Boolean, default: false },
 }, { timestamps: true });

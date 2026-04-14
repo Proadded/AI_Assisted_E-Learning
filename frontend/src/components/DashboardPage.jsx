@@ -15,13 +15,17 @@
  * Phase 3 will add: date filters, difficulty filter, CourseProgressCard
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useMemo } from "react";
+import { io } from "socket.io-client";
 import {
   BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ReferenceLine,
   AreaChart, Area, ResponsiveContainer,
 } from "recharts";
 import useAuthStore from "../store/useAuthStore.js";
 import useStudentContextStore from "../store/useStudentContextStore.js";
+import useCapstoneStore from "../store/useCapstoneStore.js";
+import FingerprintInsightPanel from "./FingerprintInsightPanel.jsx";
+import axiosInstance from "../lib/axios.js";
 
 // ─── Design tokens (match PROJECT_STATE.md CSS variables) ─────────────────
 const T = {
@@ -48,7 +52,37 @@ const CSS = `
     color: ${T.textBody};
     background: ${T.ivory};
     min-height: 100vh;
-    padding: 32px 24px 80px;
+    padding: var(--navbar-height, 72px) 24px 80px;
+  }
+
+  /* ── Scores two-column grid ── */
+  .dp-scores-grid {
+    display: grid;
+    grid-template-columns: 70fr 30fr;
+    gap: 24px;
+    align-items: stretch;
+    margin-bottom: 20px;
+  }
+  .dp-scores-left {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+  }
+  .dp-chart-wrapper {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+  }
+  .dp-scores-grid > .db-panel { margin-bottom: 0; }
+  .dp-scores-stat-col {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  @media (max-width: 768px) {
+    .dp-scores-grid {
+      grid-template-columns: 1fr;
+    }
   }
   .db-root * { box-sizing: border-box; }
 
@@ -186,6 +220,116 @@ const CSS = `
     font-family: 'DM Sans', sans-serif;
   }
   .db-tooltip-label { font-size: 11px; color: ${T.warmGrey}; margin-bottom: 2px; }
+
+  /* DP course pills + chart empty */
+  .dp-course-pills { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 16px; }
+  .dp-course-pill { padding: 6px 16px; border-radius: 999px; border: 1.5px solid var(--border); background: transparent; color: var(--text-body); font-family: 'DM Sans', sans-serif; font-size: 13px; cursor: pointer; transition: all 0.2s ease; }
+  .dp-course-pill:hover { border-color: var(--amber); color: var(--charcoal); }
+  .dp-course-pill.active { background: var(--amber); border-color: var(--amber); color: var(--ivory); font-weight: 500; }
+  .dp-chart-empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--text-muted); font-size: 14px; font-family: 'DM Sans', sans-serif; }
+
+  /* dp-filter-bar UI controls */
+  .dp-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+  }
+  .dp-filter-label {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-family: DM Sans, sans-serif;
+    white-space: nowrap;
+  }
+  .dp-filter-input {
+    font-size: 13px;
+    font-family: DM Sans, sans-serif;
+    color: var(--text-body);
+    background: var(--ivory);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    outline: none;
+    cursor: pointer;
+  }
+  .dp-filter-input:focus {
+    border-color: var(--amber);
+  }
+  .dp-filter-reset {
+    font-size: 12px;
+    color: var(--amber);
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: DM Sans, sans-serif;
+    padding: 0;
+    text-decoration: underline;
+  }
+
+  /* dp-progress-section */
+  .dp-progress-section {
+    margin-bottom: 32px;
+  }
+  .dp-progress-section-title {
+    font-family: 'DM Serif Display', serif;
+    font-size: 20px;
+    color: var(--ink);
+    margin-bottom: 16px;
+    font-weight: 400;
+  }
+  .dp-progress-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 16px;
+  }
+  .dp-progress-card {
+    background: #fff;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+  }
+  .dp-progress-card-title {
+    font-family: DM Sans, sans-serif;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-body);
+    text-align: center;
+    line-height: 1.4;
+  }
+  .dp-progress-ring-wrap {
+    position: relative;
+    width: 88px;
+    height: 88px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .dp-progress-ring-label {
+    position: absolute;
+    font-family: DM Mono, monospace;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--ink);
+    text-align: center;
+    line-height: 1;
+  }
+  .dp-progress-meta {
+    font-family: DM Sans, sans-serif;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: center;
+  }
+  .dp-progress-tests-passed {
+    font-family: DM Sans, sans-serif;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-align: center;
+  }
 `;
 
 // ─── Sub-components ────────────────────────────────────────────────────────
@@ -212,12 +356,13 @@ const ProficiencyBadge = ({ level }) => {
 const CustomBarTooltip = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   const d = payload[0].payload;
+  const isPass = d.score >= 70;
   return (
     <div className="db-tooltip">
       <div className="db-tooltip-label">{d.label}</div>
       <div style={{ fontWeight: 500, fontSize: 14 }}>{d.score}%</div>
-      <div style={{ color: d.passed ? "#6DD49E" : T.warmGrey, fontSize: 11 }}>
-        {d.passed ? "Passed" : "Failed"}{d.difficulty ? ` · ${d.difficulty}` : ""}
+      <div style={{ color: isPass ? "#6DD49E" : T.warmGrey, fontSize: 11 }}>
+        {isPass ? "Passed" : "Failed"}{d.difficulty ? ` · ${d.difficulty}` : ""}
       </div>
     </div>
   );
@@ -237,10 +382,86 @@ const CustomAreaTooltip = ({ active, payload, label }) => {
   );
 };
 
+function CourseProgressCard({ courseContext }) {
+  const {
+    courseId,
+    courseTitle,
+    enrollment,
+    aggregateScore,
+  } = courseContext;
+
+  const [realProgress, setRealProgress] = useState(null);
+
+  useEffect(() => {
+    axiosInstance.get(`/progress/course/${courseId}`)
+      .then(res => setRealProgress(res.data))
+      .catch(() => {}); // silent fail — fall back to SCS data
+  }, [courseId]);
+
+  const percent = realProgress?.percentComplete ?? enrollment?.completionPercent ?? 0;
+  const videosWatched = realProgress?.completedCount ?? enrollment?.videosWatched ?? 0;
+  const videosTotal   = realProgress?.totalCount     ?? enrollment?.videosTotal ?? 0;
+  const allTestsPassed = enrollment?.allTestsPassed ?? false;
+
+  // SVG circle ring parameters
+  const size   = 88;
+  const stroke = 7;
+  const r      = (size - stroke) / 2;
+  const circ   = 2 * Math.PI * r;
+  const offset = circ - (percent / 100) * circ;
+
+  return (
+    <div className="dp-progress-card">
+      <div className="dp-progress-ring-wrap">
+        <svg width={size} height={size}>
+          {/* Background track */}
+          <circle
+            cx={size / 2} cy={size / 2} r={r}
+            fill="none"
+            stroke="var(--ivory-dark)"
+            strokeWidth={stroke}
+          />
+          {/* Progress arc */}
+          <circle
+            cx={size / 2} cy={size / 2} r={r}
+            fill="none"
+            stroke="var(--amber)"
+            strokeWidth={stroke}
+            strokeLinecap="round"
+            strokeDasharray={circ}
+            strokeDashoffset={offset}
+            transform={`rotate(-90 ${size / 2} ${size / 2})`}
+            style={{ transition: "stroke-dashoffset 0.6s ease" }}
+          />
+        </svg>
+        <span className="dp-progress-ring-label">{Math.round(percent)}%</span>
+      </div>
+
+      <div className="dp-progress-card-title">
+        {courseTitle.length > 28 ? courseTitle.slice(0, 26) + "…" : courseTitle}
+      </div>
+
+      <div className="dp-progress-meta">
+        {videosWatched} / {videosTotal} videos
+      </div>
+
+      <div className="dp-progress-tests-passed">
+        {allTestsPassed
+          ? "✓ All tests passed"
+          : aggregateScore?.totalAttempts > 0
+            ? `${aggregateScore.totalAttempts} test${aggregateScore.totalAttempts !== 1 ? "s" : ""} attempted`
+            : "No tests yet"
+        }
+      </div>
+    </div>
+  );
+}
+
 // ─── Main component ────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
   const { authUser } = useAuthStore();
+  const fetchCapstoneStatus = useCapstoneStore((state) => state.fetchStatus);
   const {
     context,
     isLoading,
@@ -252,6 +473,12 @@ export default function DashboardPage() {
     getActiveAggregateScore,
   } = useStudentContextStore();
 
+  const handleResetFilters = () => {
+    setFilter("dateFrom", null);
+    setFilter("dateTo", null);
+    setFilter("difficulty", "all");
+  };
+
   // Fetch on mount
   useEffect(() => {
     if (authUser?._id) {
@@ -259,21 +486,80 @@ export default function DashboardPage() {
     }
   }, [authUser?._id]);
 
+  // Sync navbar height to CSS custom property so .db-root padding doesn't overlap
+  useEffect(() => {
+    const navbar = document.querySelector("nav") || document.querySelector("[class*='nb-']");
+    if (navbar) {
+      document.documentElement.style.setProperty(
+        "--navbar-height",
+        navbar.offsetHeight + "px"
+      );
+    }
+  }, []);
+
+  // Real-time context refresh via Socket.IO
+  useEffect(() => {
+    if (!authUser?._id) return;
+
+    const socket = io("http://localhost:3001", { withCredentials: true });
+
+    socket.on("context:updated", ({ studentId }) => {
+      if (studentId === authUser._id.toString()) {
+        fetchContext(authUser._id);
+      }
+    });
+
+    socket.on("capstone:unlocked", ({ studentId, courseId }) => {
+      if (studentId !== authUser._id.toString()) return;
+      const isEnrolled = (context?.courses || []).some(
+        (course) => String(course.courseId) === String(courseId)
+      );
+      if (isEnrolled && courseId) {
+        fetchCapstoneStatus(courseId);
+      }
+    });
+
+    return () => socket.disconnect();
+  }, [authUser?._id, context?.courses, fetchContext, fetchCapstoneStatus]);
+
   // ── Derived data for charts ──
   const filteredTests  = getFilteredTestHistory();
   const aggregateScore = getActiveAggregateScore();
 
-  // Bar chart data: one entry per test attempt
-  const barData = filteredTests.map((t, i) => ({
-    label:      t.videoTitle ? `${t.videoTitle}` : `Test ${i + 1}`,
-    score:      t.totalScore ?? 0,
-    passed:     t.passed,
-    difficulty: t.difficulty,
-    takenAt:    t.takenAt,
-  }));
+  // Local UI state: selected course for Test Scores section
+  const [selectedCourseId, setSelectedCourseId] = useState("all");
 
-  // Area chart data: date-grouped with 7-day moving average overlay
-  const areaData = buildAreaChartData(filteredTests);
+  // Filter tests for the local chart based on selectedCourseId
+  const selectedFilteredTests = useMemo(() => {
+    if (!filteredTests) return [];
+    if (selectedCourseId === "all") return filteredTests;
+    return filteredTests.filter((t) => String(t.courseId) === String(selectedCourseId));
+  }, [filteredTests, selectedCourseId]);
+
+  // Note: Known limitation if history entries do not have difficulty tracking natively yet
+  const filtered = selectedFilteredTests.filter(entry => {
+    if (activeFilters.dateFrom && new Date(entry.takenAt) < new Date(activeFilters.dateFrom)) return false;
+    if (activeFilters.dateTo   && new Date(entry.takenAt) > new Date(activeFilters.dateTo))   return false;
+    if (activeFilters.difficulty && activeFilters.difficulty !== "all" && entry.difficulty !== activeFilters.difficulty) return false;
+    return true;
+  });
+
+  // Bar chart data: one entry per test attempt (filtered by local selection)
+  const barData = filtered.map((t, i) => {
+    const previousAttempts = filtered.slice(0, i).filter((prev) => prev.videoId === t.videoId).length;
+    const attemptSuffix = previousAttempts > 0 ? ` (Att ${previousAttempts + 1})` : "";
+    
+    return {
+      label:      t.videoTitle ? `${t.videoTitle}${attemptSuffix}` : `Test ${i + 1}`,
+      score:      t.totalScore ?? 0,
+      passed:     t.passed,
+      difficulty: t.difficulty,
+      takenAt:    t.takenAt,
+    };
+  });
+
+  // Area chart data: date-grouped with 7-day moving average overlay (filtered by local selection)
+  const areaData = buildAreaChartData(filtered);
 
   // Courses for tab selector
   const courses = context?.courses || [];
@@ -281,6 +567,30 @@ export default function DashboardPage() {
     activeFilters.courseId !== "all"
       ? courses.find((c) => c.courseId === activeFilters.courseId)
       : null;
+
+  const selectedFingerprints = useMemo(() => {
+    if (!courses || courses.length === 0) return [];
+    if (activeFilters.courseId !== "all") {
+      const course = courses.find((c) => c.courseId === activeFilters.courseId);
+      return course?.fingerprints || [];
+    }
+    const fpMap = new Map();
+    courses.forEach((c) => {
+      (c.fingerprints || []).forEach((fp) => {
+        const existing = fpMap.get(fp.conceptTag);
+        if (!existing) {
+          fpMap.set(fp.conceptTag, fp);
+        } else {
+          const scoreA = fp.fingerprintScore !== null ? fp.fingerprintScore : -1;
+          const scoreB = existing.fingerprintScore !== null ? existing.fingerprintScore : -1;
+          if (scoreA > scoreB) {
+            fpMap.set(fp.conceptTag, fp);
+          }
+        }
+      });
+    });
+    return Array.from(fpMap.values());
+  }, [courses, activeFilters.courseId]);
 
   // ── Render states ──
   if (isLoading) return <DashboardSkeleton />;
@@ -336,6 +646,21 @@ export default function DashboardPage() {
           </div>
         )}
 
+        {/* ── Course Progress Overview ── */}
+        {context?.courses?.length > 0 && (
+          <div className="dp-progress-section">
+            <div className="dp-progress-section-title">Course Progress</div>
+            <div className="dp-progress-cards">
+              {context.courses.map(courseCtx => (
+                <CourseProgressCard
+                  key={courseCtx.courseId}
+                  courseContext={courseCtx}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* ── Course selector ── */}
         {courses.length > 1 && (
           <div className="db-course-tabs">
@@ -357,6 +682,38 @@ export default function DashboardPage() {
           </div>
         )}
 
+        <div className="dp-filter-bar">
+          <span className="dp-filter-label">From</span>
+          <input
+            type="date"
+            className="dp-filter-input"
+            value={activeFilters.dateFrom ? activeFilters.dateFrom.split("T")[0] : ""}
+            onChange={e => setFilter("dateFrom", e.target.value ? new Date(e.target.value).toISOString() : null)}
+          />
+          <span className="dp-filter-label">To</span>
+          <input
+            type="date"
+            className="dp-filter-input"
+            value={activeFilters.dateTo ? activeFilters.dateTo.split("T")[0] : ""}
+            onChange={e => setFilter("dateTo", e.target.value ? new Date(e.target.value).toISOString() : null)}
+          />
+          <select
+            className="dp-filter-input"
+            value={activeFilters.difficulty || "all"}
+            onChange={e => setFilter("difficulty", e.target.value === "all" ? "all" : e.target.value)}
+          >
+            <option value="all">All difficulties</option>
+            <option value="beginner">Beginner</option>
+            <option value="intermediate">Intermediate</option>
+            <option value="advanced">Advanced</option>
+          </select>
+          {(activeFilters.dateFrom || activeFilters.dateTo || (activeFilters.difficulty && activeFilters.difficulty !== "all")) && (
+            <button className="dp-filter-reset" onClick={handleResetFilters}>
+              Reset filters
+            </button>
+          )}
+        </div>
+
         {/* ── Active course meta ── */}
         {activeCourse && (
           <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 24 }}>
@@ -374,44 +731,74 @@ export default function DashboardPage() {
           <EmptyState />
         ) : (
           <>
-            {/* ── Score bar chart ── */}
-            <div className="db-panel">
-              <div className="db-panel-title">Test Scores</div>
-              <div className="db-panel-desc">
-                Each bar is one test attempt — amber = passed, grey = failed · Pass line at 70%
+            {/* ── Score bar chart + stat cards — two-column grid ── */}
+            <div className="dp-course-pills">
+              <button className={`dp-course-pill ${selectedCourseId === "all" ? "active" : ""}`} onClick={() => setSelectedCourseId("all")}>All Courses</button>
+              {courses.map((course) => (
+                <button
+                  key={course.courseId}
+                  className={`dp-course-pill ${selectedCourseId === course.courseId ? "active" : ""}`}
+                  onClick={() => setSelectedCourseId(course.courseId)}
+                >
+                  {course.courseTitle}
+                </button>
+              ))}
+            </div>
+
+            <div className="dp-scores-grid">
+              {/* Left column: bar chart */}
+              <div className="db-panel dp-scores-left">
+                <div className="db-panel-title">Test Scores</div>
+                <div className="db-panel-desc">
+                  Each bar is one test attempt — amber = passed, grey = failed · Pass line at 70%
+                </div>
+                <div className="db-chart-wrap dp-chart-wrapper">
+                  {barData.length === 0 ? (
+                    <div className="dp-chart-empty">No test results yet for this course.</div>
+                  ) : (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <BarChart data={barData} margin={{ top: 6, right: 16, bottom: 28, left: 0 }}>
+                        <XAxis
+                          dataKey="label"
+                          tick={{ fill: T.textMuted, fontSize: 10 }}
+                          angle={-30}
+                          textAnchor="end"
+                          interval={0}
+                          height={48}
+                        />
+                        <YAxis
+                          domain={[0, 100]}
+                          tick={{ fill: T.textMuted, fontSize: 10 }}
+                          tickFormatter={(v) => `${v}%`}
+                          width={36}
+                        />
+                        <ReferenceLine
+                          y={70}
+                          stroke={T.warmGrey}
+                          strokeDasharray="4 3"
+                          label={{ value: "Pass", fill: T.textMuted, fontSize: 10, position: "right" }}
+                        />
+                        <Tooltip content={<CustomBarTooltip />} cursor={{ fill: T.amberPale }} />
+                        <Bar dataKey="score" radius={[4, 4, 0, 0]} maxBarSize={40}>
+                          {barData.map((entry, i) => (
+                            <Cell key={i} fill={entry.score >= 70 ? T.amber : T.warmGrey} />
+                          ))}
+                        </Bar>
+                      </BarChart>
+                    </ResponsiveContainer>
+                  )}
+                </div>
               </div>
-              <div className="db-chart-wrap">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={barData} margin={{ top: 6, right: 16, bottom: 28, left: 0 }}>
-                    <XAxis
-                      dataKey="label"
-                      tick={{ fill: T.textMuted, fontSize: 10 }}
-                      angle={-30}
-                      textAnchor="end"
-                      interval={0}
-                      height={48}
-                    />
-                    <YAxis
-                      domain={[0, 100]}
-                      tick={{ fill: T.textMuted, fontSize: 10 }}
-                      tickFormatter={(v) => `${v}%`}
-                      width={36}
-                    />
-                    <ReferenceLine
-                      y={70}
-                      stroke={T.warmGrey}
-                      strokeDasharray="4 3"
-                      label={{ value: "Pass", fill: T.textMuted, fontSize: 10, position: "right" }}
-                    />
-                    <Tooltip content={<CustomBarTooltip />} cursor={{ fill: T.amberPale }} />
-                    <Bar dataKey="score" radius={[4, 4, 0, 0]} maxBarSize={40}>
-                      {barData.map((entry, i) => (
-                        <Cell key={i} fill={entry.passed ? T.amber : T.warmGrey} />
-                      ))}
-                    </Bar>
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
+
+              {/* Right column: stat cards stacked vertically */}
+              {aggregateScore && aggregateScore.averageScore !== null && (
+                <div className="dp-scores-stat-col">
+                  <KpiCard label="Average Score"  value={`${aggregateScore.averageScore}%`} sub="all attempts" highlight="amber" />
+                  <KpiCard label="Highest Score"  value={`${aggregateScore.highestScore}%`} sub="personal best" highlight="green" />
+                  <KpiCard label="Pass Rate"      value={`${aggregateScore.passRate}%`} sub="of attempts passed" />
+                  <KpiCard label="7-day Avg"      value={`${aggregateScore.movingAverage7d}%`} sub="recent performance" />
+                </div>
+              )}
             </div>
 
             {/* ── Performance trend ── */}
@@ -470,21 +857,10 @@ export default function DashboardPage() {
                 </div>
               </div>
             )}
-
-            {/* ── Aggregate stats row ── */}
-            {aggregateScore && aggregateScore.averageScore !== null && (
-              <div className="db-kpi-row" style={{ marginTop: 4 }}>
-                <KpiCard label="Average Score"  value={`${aggregateScore.averageScore}%`} sub="all attempts" highlight="amber" />
-                <KpiCard label="Highest Score"  value={`${aggregateScore.highestScore}%`} sub="personal best" highlight="green" />
-                <KpiCard label="Pass Rate"      value={`${aggregateScore.passRate}%`} sub="of attempts passed" />
-                <KpiCard label="7-day Avg"      value={`${aggregateScore.movingAverage7d}%`} sub="recent performance" />
-              </div>
-            )}
           </>
         )}
 
-        {/* ── Phase 2 hook: FingerprintInsightPanel will slot in here ── */}
-        {/* <FingerprintInsightPanel /> */}
+        <FingerprintInsightPanel fingerprints={selectedFingerprints} />
 
       </div>
     </>

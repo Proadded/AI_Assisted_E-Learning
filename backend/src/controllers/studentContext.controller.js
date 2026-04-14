@@ -19,6 +19,7 @@ import { buildStudentContext, refreshCourseContext } from "../services/studentCo
  */
 export const getStudentContext = async (req, res) => {
   try {
+    console.log("getStudentContext called with:", req.params.studentId, "by user:", req.user?._id);
     const { studentId } = req.params;
 
     // Ownership check — students can only access their own context
@@ -32,7 +33,7 @@ export const getStudentContext = async (req, res) => {
     const context = await buildStudentContext(studentId);
     return res.status(200).json({ context });
   } catch (error) {
-    console.log("Error in getStudentContext controller:", error.message);
+    console.error("[SCS CONTROLLER ERROR] full error:", error);
     return res.status(500).json({ message: "Server error" });
   }
 };

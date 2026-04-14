@@ -7,6 +7,8 @@ import LoginPage from './components/LoginPage'
 import DashboardPage from './components/DashboardPage'
 import CoursePage from './components/CoursePage'
 import CourseDetailPage from "./pages/CourseDetailPage.jsx";
+import CapstonePage from "./pages/CapstonePage.jsx";
+import CapstoneResultPage from "./pages/CapstoneResultPage.jsx";
 
 //Future pages
 import TutorPlaceholderPage from './components/TutorPlaceholderPage'
@@ -65,6 +67,8 @@ const App = () => {
           }
         />
         <Route path="/course/:courseId" element={authUser ? <CourseDetailPage /> : <Navigate to="/login" />} />
+        <Route path="/capstone/:courseId" element={authUser ? <CapstonePage /> : <Navigate to="/login" />} />
+        <Route path="/capstone/:courseId/result/:sessionId" element={authUser ? <CapstoneResultPage /> : <Navigate to="/login" />} />
       </Routes>
       <Toaster />
     </div>
