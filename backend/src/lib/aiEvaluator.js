@@ -77,19 +77,20 @@ export const generateCapstoneMCQ = async ({
     difficulty = "intermediate",
     existingQuestions = [],
 }) => {
-    const difficultyMap = {
-        beginner: "easy",
-        intermediate: "medium",
-        advanced: "hard",
-    };
-    const mappedDifficulty = difficultyMap[difficulty] || "medium";
-    const existingStems = Array.isArray(existingQuestions)
-        ? existingQuestions
-            .map((q) => (typeof q?.stem === "string" ? q.stem.trim() : ""))
-            .filter(Boolean)
-        : [];
+    try {
+        const difficultyMap = {
+            beginner: "easy",
+            intermediate: "medium",
+            advanced: "hard",
+        };
+        const mappedDifficulty = difficultyMap[difficulty] || "medium";
+        const existingStems = Array.isArray(existingQuestions)
+            ? existingQuestions
+                .map((q) => (typeof q === "string" ? q.trim() : typeof q?.stem === "string" ? q.stem.trim() : ""))
+                .filter(Boolean)
+            : [];
 
-    const prompt = `You are generating capstone-level MCQs for an e-learning platform.
+        const prompt = `You are generating capstone-level MCQs for an e-learning platform.
 
 Return ONLY a valid JSON array. Do not include any preamble, explanation, or markdown code fences.
 
@@ -112,59 +113,67 @@ Each array element must strictly match this shape:
 }
 
 Rules:
+- stem must end with a question mark (?) or a colon (:)
 - options must be exactly 4 distinct plausible options
 - correctIndex must be an integer from 0 to 3
 - conceptTag must exactly match "${conceptTag}"
 - source must be "ai_generated"
 - difficulty must be "${mappedDifficulty}"`;
 
-    const sleep = (ms) => new Promise(res => setTimeout(res, ms));
-    const delays = [2000, 4000, 8000];
-    let result;
+        const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+        const delays = [2000, 4000, 8000];
+        let result;
 
-    for (let attempt = 0; attempt <= 3; attempt++) {
-        try {
-            result = await model.generateContent(prompt);
-            break;
-        } catch (error) {
-            const msg = error.message || "";
-            const isRetryable = msg.includes("503") || msg.includes("Service Unavailable") || msg.includes("high demand");
+        for (let attempt = 0; attempt <= 3; attempt++) {
+            try {
+                result = await model.generateContent(prompt);
+                break;
+            } catch (error) {
+                const msg = error.message || "";
+                const isRetryable = msg.includes("503") || msg.includes("Service Unavailable") || msg.includes("high demand");
 
-            if (isRetryable && attempt < 3) {
-                await sleep(delays[attempt]);
-            } else {
-                throw error;
+                if (isRetryable && attempt < 3) {
+                    await sleep(delays[attempt]);
+                } else {
+                    throw error;
+                }
             }
         }
+
+        const raw = result.response.text().trim();
+
+        let parsed;
+        try {
+            parsed = JSON.parse(raw);
+        } catch {
+            const cleaned = raw.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
+            parsed = JSON.parse(cleaned);
+        }
+
+        if (!Array.isArray(parsed)) return [];
+
+        return parsed.filter((q) => {
+            const stemTrimmed = typeof q?.stem === "string" ? q.stem.trim() : "";
+            const hasValidStem = stemTrimmed.endsWith("?") || stemTrimmed.endsWith(":");
+            const hasValidOptions =
+                Array.isArray(q?.options) &&
+                q.options.length === 4 &&
+                q.options.every((opt) => typeof opt === "string");
+            const hasValidCorrectIndex =
+                typeof q?.correctIndex === "number" &&
+                Number.isInteger(q.correctIndex) &&
+                q.correctIndex >= 0 &&
+                q.correctIndex <= 3;
+            const hasMatchingConceptTag = q?.conceptTag === conceptTag;
+            const hasValidSource = q?.source === "ai_generated";
+            const hasMatchingDifficulty = q?.difficulty === mappedDifficulty;
+
+            return hasValidStem && hasValidOptions && hasValidCorrectIndex && hasMatchingConceptTag && hasValidSource && hasMatchingDifficulty;
+        });
+    } catch (err) {
+        console.log("generateCapstoneMCQ failed:", err.message);
+        return [];
     }
-
-    const raw = result.response.text().trim();
-
-    let parsed;
-    try {
-        parsed = JSON.parse(raw);
-    } catch {
-        const cleaned = raw.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
-        parsed = JSON.parse(cleaned);
-    }
-
-    if (!Array.isArray(parsed)) return [];
-
-    return parsed.filter((q) => {
-        const hasValidStem = typeof q?.stem === "string" && q.stem.trim().length > 0;
-        const hasValidOptions =
-            Array.isArray(q?.options) &&
-            q.options.length === 4 &&
-            q.options.every((opt) => typeof opt === "string");
-        const hasValidCorrectIndex =
-            typeof q?.correctIndex === "number" &&
-            Number.isInteger(q.correctIndex) &&
-            q.correctIndex >= 0 &&
-            q.correctIndex <= 3;
-        const hasMatchingConceptTag = q?.conceptTag === conceptTag;
-
-        return hasValidStem && hasValidOptions && hasValidCorrectIndex && hasMatchingConceptTag;
-    });
 };
 
 /**

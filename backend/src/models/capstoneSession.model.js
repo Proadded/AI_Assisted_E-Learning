@@ -4,6 +4,7 @@ export const CapstoneQuestionSchema = new mongoose.Schema(
   {
     questionId: {
       type: mongoose.Schema.Types.ObjectId,
+      ref: "Test",
       default: null,
     },
     stem: String,
@@ -44,9 +45,18 @@ const capstoneSessionSchema = new mongoose.Schema(
       default: "pending",
     },
     questions: [CapstoneQuestionSchema],
-    fingerprintSnapshot: mongoose.Schema.Types.Mixed,
-    score: Number,
-    passed: Boolean,
+    fingerprintSnapshot: {
+      type: Object,
+      default: {},
+    },
+    score: {
+      type: Number,
+      default: null,
+    },
+    passed: {
+      type: Boolean,
+      default: null,
+    },
     passingThreshold: {
       type: Number,
       default: 70,

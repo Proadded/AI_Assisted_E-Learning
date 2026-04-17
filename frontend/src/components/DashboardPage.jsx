@@ -25,6 +25,7 @@ import useAuthStore from "../store/useAuthStore.js";
 import useStudentContextStore from "../store/useStudentContextStore.js";
 import useCapstoneStore from "../store/useCapstoneStore.js";
 import FingerprintInsightPanel from "./FingerprintInsightPanel.jsx";
+import CapstoneStatusCard from "./CapstoneStatusCard.jsx";
 import axiosInstance from "../lib/axios.js";
 
 // ─── Design tokens (match PROJECT_STATE.md CSS variables) ─────────────────
@@ -70,7 +71,7 @@ const CSS = `
   }
   .dp-chart-wrapper {
     flex: 1;
-    min-height: 0;
+    min-height: 240px;
     width: 100%;
   }
   .dp-scores-grid > .db-panel { margin-bottom: 0; }
@@ -479,6 +480,8 @@ export default function DashboardPage() {
     setFilter("difficulty", "all");
   };
 
+  const [capstoneRefreshKey, setCapstoneRefreshKey] = useState(0);
+
   // Fetch on mount
   useEffect(() => {
     if (authUser?._id) {
@@ -510,16 +513,15 @@ export default function DashboardPage() {
     });
 
     socket.on("capstone:unlocked", ({ studentId, courseId }) => {
-      if (studentId !== authUser._id.toString()) return;
-      const isEnrolled = (context?.courses || []).some(
-        (course) => String(course.courseId) === String(courseId)
-      );
-      if (isEnrolled && courseId) {
-        fetchCapstoneStatus(courseId);
+      if (studentId === authUser._id.toString()) {
+        setCapstoneRefreshKey(k => k + 1);
       }
     });
 
-    return () => socket.disconnect();
+    return () => {
+      socket.off("capstone:unlocked");
+      socket.disconnect();
+    };
   }, [authUser?._id, context?.courses, fetchContext, fetchCapstoneStatus]);
 
   // ── Derived data for charts ──
@@ -752,11 +754,11 @@ export default function DashboardPage() {
                 <div className="db-panel-desc">
                   Each bar is one test attempt — amber = passed, grey = failed · Pass line at 70%
                 </div>
-                <div className="db-chart-wrap dp-chart-wrapper">
+                <div className="db-chart-wrap dp-chart-wrapper" style={{ minHeight: 240 }}>
                   {barData.length === 0 ? (
                     <div className="dp-chart-empty">No test results yet for this course.</div>
                   ) : (
-                    <ResponsiveContainer width="100%" height="100%">
+                    <ResponsiveContainer width="100%" height={240}>
                       <BarChart data={barData} margin={{ top: 6, right: 16, bottom: 28, left: 0 }}>
                         <XAxis
                           dataKey="label"
@@ -812,7 +814,7 @@ export default function DashboardPage() {
                   Solid line = score · Dashed = 7-day moving average
                 </div>
                 <div className="db-chart-wrap">
-                  <ResponsiveContainer width="100%" height="100%">
+                  <ResponsiveContainer width="100%" height={240}>
                     <AreaChart data={areaData} margin={{ top: 6, right: 16, bottom: 16, left: 0 }}>
                       <defs>
                         <linearGradient id="scoreGrad" x1="0" y1="0" x2="0" y2="1">
@@ -861,6 +863,23 @@ export default function DashboardPage() {
         )}
 
         <FingerprintInsightPanel fingerprints={selectedFingerprints} />
+
+        {/* ── Final Exams ── */}
+        {context?.courses?.length > 0 && (
+          <div className="dp-progress-section">
+            <div className="dp-progress-section-title">Final Exams</div>
+            <div className="dp-progress-cards">
+              {context.courses.map(course => (
+                <CapstoneStatusCard
+                  key={course.courseId}
+                  courseId={course.courseId}
+                  courseName={course.courseTitle}
+                  refreshKey={capstoneRefreshKey}
+                />
+              ))}
+            </div>
+          </div>
+        )}
 
       </div>
     </>

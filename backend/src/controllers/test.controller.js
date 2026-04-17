@@ -4,6 +4,7 @@ import TestResult from "../models/testResult.model.js";
 import StudentFingerprint from "../models/fingerprint.model.js";
 import Course from "../models/course.model.js";
 import User from "../models/user.model.js";
+import Video from "../models/video.model.js";
 import { evaluateSubjectiveAnswer, calculateWeightedScore, generateAiAnalysis } from "../lib/aiEvaluator.js";
 import { updateFingerprintsFromResult } from "../services/fingerprintEngine.service.js";
 
@@ -228,22 +229,48 @@ async function finalizeResult(result, test, io) {
 }
 
 async function checkCourseCompletion(studentId, courseId, io) {
-    const allTests = await Test.find({ courseId });
-    const allResults = await TestResult.find({ studentId, courseId });
+    console.log("[CCC] fired", studentId, courseId);
+    
+    // fetch all course videos
+    const courseVideos = await Video.find({ courseId }).select("_id").lean();
+    const courseVideoIds = courseVideos.map(v => v._id.toString());
 
-    const everyTestPassed = allTests.every((test) =>
-        allResults.some(
-            (r) => r.testId.toString() === test._id.toString() && r.passed === true
-        )
-    );
+    // fetch watched progress
+    const watchedDocs = await Progress.find({
+        studentId,
+        videoId: { $in: courseVideos.map(v => v._id) },
+        watched: true
+    });
 
-    if (everyTestPassed) {
+    const allVideosWatched = watchedDocs.length >= courseVideoIds.length;
+
+    const allTests = await Test.find({ courseId }).select("videoId").lean();
+    const videoIds = allTests.map(t => t.videoId).filter(Boolean);
+
+    const progressDocs = await Progress.find({ studentId, videoId: { $in: videoIds } }).lean();
+    
+    console.log("[CCC] videoIds:", videoIds.length, videoIds);
+    console.log("[CCC] progressDocs:", progressDocs.length);
+    console.log("[CCC] passed count:", progressDocs.filter(p => p.testScore >= 70).length);
+
+    const allTestsPassed = progressDocs.filter(p => p.testScore >= 70).length >= videoIds.length;
+
+    console.log("[CCC] flags", { allTestsPassed, allVideosWatched });
+
+    if (allTestsPassed && allVideosWatched) {
+        // Read pre-update state to detect the first-time unlock transition
+        const existingProgress = await Progress.findOne({ studentId, videoId: { $in: videoIds } })
+            .select("allTestsPassed")
+            .lean();
+        const wasAlreadyUnlocked = existingProgress?.allTestsPassed === true;
+
         await Progress.updateMany(
-            { studentId, courseId },
-            { allTestsPassed: true, courseComplete: true }
+            { studentId, videoId: { $in: videoIds } },
+            { $set: { allTestsPassed: true, courseComplete: true } }
         );
 
-        if (io) {
+        // Only emit on the first transition (false → true), not on every passing submission
+        if (!wasAlreadyUnlocked && io) {
             io.emit("capstone:unlocked", {
                 courseId: courseId.toString(),
                 studentId: studentId.toString(),

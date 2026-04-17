@@ -50,8 +50,8 @@ const computeUnlockState = (progressDocs = []) => {
   if (hasFailingTakenTest) return false;
 
   // If explicit allTestsPassed is tracked, respect it.
-  const hasAnyUnpassedFlag = progressDocs.some((p) => p.allTestsPassed === false);
-  if (hasAnyUnpassedFlag) return false;
+  const hasExplicitPass = progressDocs.some((p) => p.allTestsPassed === true);
+  if (!hasExplicitPass) return false;
 
   return true;
 };
@@ -87,23 +87,45 @@ const buildBucketTargets = () => {
   };
 };
 
+function validateAiQuestion(q, expectedConceptTag, expectedDifficulty) {
+  if (!q.stem || typeof q.stem !== "string") return false;
+  if (!q.stem.endsWith("?") && !q.stem.endsWith(":")) return false;
+  if (!Array.isArray(q.options) || q.options.length !== 4) return false;
+  if (typeof q.correctIndex !== "number" || q.correctIndex < 0 || q.correctIndex > 3) return false;
+  if (q.conceptTag !== expectedConceptTag) return false;
+  if (q.source !== "ai_generated") return false;
+  if (q.difficulty !== expectedDifficulty) return false;
+  return true;
+}
+
 export const getCapstoneStatus = async (req, res) => {
   try {
     const { courseId } = req.params;
     const studentId = req.user?._id;
 
+    const tests = await Test.find({ courseId }).select("videoId").lean();
+    const videoIds = tests.map(t => t.videoId).filter(Boolean);
+
     const [latestSession, progressDocs] = await Promise.all([
       CapstoneSession.findOne({ studentId, courseId }).sort({ generatedAt: -1 }).lean(),
-      Progress.find({ studentId, courseId }).select("testTaken testScore allTestsPassed").lean(),
+      Progress.find({ studentId, videoId: { $in: videoIds } }).select("testTaken testScore allTestsPassed capstonePassed").lean(),
     ]);
 
     const unlocked = computeUnlockState(progressDocs);
+    const capstonePassed = progressDocs.some((p) => p.capstonePassed === true);
+
+    // Active cooldown check: cooldownUntil on the latest session is still in the future
+    const cooldownUntil = latestSession?.cooldownUntil ?? null;
+    const cooldownActive = cooldownUntil && Date.now() < new Date(cooldownUntil).getTime();
+
+    console.log("[STATUS] progressDocs raw:", JSON.stringify(progressDocs, null, 2));
+    console.log("[STATUS] unlocked raw:", unlocked);
 
     return res.status(200).json({
-      unlocked,
-      passed: latestSession?.passed ?? false,
-      lastScore: typeof latestSession?.score === "number" ? latestSession.score : null,
-      cooldownUntil: latestSession?.cooldownUntil ?? null,
+      unlocked: unlocked && !capstonePassed && !cooldownActive,
+      capstonePassed,
+      lastAttempt: latestSession ?? null,
+      cooldownUntil,
       attemptNumber: latestSession?.attemptNumber ?? 0,
     });
   } catch (error) {
@@ -117,9 +139,12 @@ export const generateCapstone = async (req, res) => {
     const { courseId } = req.params;
     const studentId = req.user?._id;
 
+    const tests = await Test.find({ courseId }).select("videoId").lean();
+    const videoIds = tests.map(t => t.videoId).filter(Boolean);
+
     const [course, progressDocs] = await Promise.all([
-      Course.findById(courseId).select("title difficulty").lean(),
-      Progress.find({ studentId, courseId }).select("testTaken testScore allTestsPassed").lean(),
+      Course.findById(courseId).select("title difficulty allowedConceptTags").lean(),
+      Progress.find({ studentId, videoId: { $in: videoIds } }).select("testTaken testScore allTestsPassed").lean(),
     ]);
 
     if (!course) {
@@ -144,6 +169,16 @@ export const generateCapstone = async (req, res) => {
       return res.status(403).json({
         message: "Capstone cooldown is still active.",
         cooldownUntil: activeCooldownSession.cooldownUntil,
+      });
+    }
+
+    const pendingSession = await CapstoneSession.findOne({ studentId, courseId, status: "pending" });
+    if (pendingSession) {
+      const clientQuestions = pendingSession.questions.map(({ correctIndex, ...rest }) => rest);
+      return res.status(200).json({
+        capstoneSessionId: pendingSession._id,
+        questions: clientQuestions,
+        totalQuestions: clientQuestions.length
       });
     }
 
@@ -268,7 +303,24 @@ export const generateCapstone = async (req, res) => {
         existingQuestions: selectedQuestions,
       });
 
-      for (const q of aiCandidates || []) {
+      const mappedDifficulty = { beginner: "easy", intermediate: "medium", advanced: "hard" }[difficulty] || "medium";
+      const validAiQuestions = (aiCandidates || []).filter(q => validateAiQuestion(q, tag, mappedDifficulty));
+      
+      const discardCount = (aiCandidates || []).length - validAiQuestions.length;
+      if (discardCount > 0) {
+        console.log(`[Capstone] Discarded ${discardCount} invalid AI questions for tag: ${tag}`);
+      }
+
+      let finalAiQuestions = validAiQuestions;
+      if (course?.allowedConceptTags?.length > 0) {
+        finalAiQuestions = validAiQuestions.filter(q => course.allowedConceptTags.includes(q.conceptTag));
+        const allowedDiscardCount = validAiQuestions.length - finalAiQuestions.length;
+        if (allowedDiscardCount > 0) {
+          console.log(`[Capstone] Discarded ${allowedDiscardCount} AI questions for tag: ${tag} due to allowedConceptTags constraint`);
+        }
+      }
+
+      for (const q of finalAiQuestions) {
         if (selectedQuestions.length >= CAPSTONE_TOTAL_QUESTIONS) break;
         const signature = `${q.conceptTag}::${q.stem}`;
         if (usedSignatures.has(signature)) continue;
@@ -322,9 +374,8 @@ export const generateCapstone = async (req, res) => {
       cooldownUntil: null,
     });
 
-    return res.status(201).json({
-      session: sanitizeSessionForClient(session),
-    });
+    const clientQuestions = session.questions.map(({ correctIndex, ...rest }) => rest);
+    return res.status(201).json({ capstoneSessionId: session._id, questions: clientQuestions, totalQuestions: clientQuestions.length });
   } catch (error) {
     console.log("Error in generateCapstone:", error.message);
     return res.status(500).json({ message: "Server error" });
@@ -348,6 +399,15 @@ export const submitCapstone = async (req, res) => {
 
     if (session.status !== "pending") {
       return res.status(400).json({ message: "This capstone session has already been submitted." });
+    }
+
+    const claimed = await CapstoneSession.findOneAndUpdate(
+      { _id: session._id, status: "pending" },
+      { $set: { status: "submitted" } },
+      { new: false }
+    );
+    if (!claimed) {
+      return res.status(400).json({ message: "Session already submitted" });
     }
 
     const safeAnswers = Array.isArray(answers) ? answers : [];
@@ -381,15 +441,15 @@ export const submitCapstone = async (req, res) => {
     await session.save();
 
     if (passed) {
-      await Progress.updateMany(
+      await Progress.findOneAndUpdate(
         { studentId, courseId: session.courseId },
         {
           $set: {
             capstonePassed: true,
-            capstoneSessionId: session._id,
             jscapstoneSessionId: session._id,
           },
-        }
+        },
+        { upsert: true }
       );
     }
 
@@ -400,6 +460,7 @@ export const submitCapstone = async (req, res) => {
         passed: session.passed,
         score: session.score,
         courseId: session.courseId,
+        studentId,
       });
     }
 
@@ -407,6 +468,7 @@ export const submitCapstone = async (req, res) => {
       passed: session.passed,
       score: session.score,
       sessionId: session._id,
+      cooldownUntil: session.cooldownUntil ?? null,
     });
   } catch (error) {
     console.log("Error in submitCapstone:", error.message);
@@ -428,13 +490,13 @@ export const getCapstoneResult = async (req, res) => {
       return res.status(403).json({ message: "Access denied." });
     }
 
-    const sanitized = sanitizeSessionForClient(session);
-    const groupedByConceptTag = buildGroupedByConcept(sanitized.questions);
+    if (session.status === "pending") {
+      return res.status(400).json({ message: "Not yet submitted" });
+    }
 
-    return res.status(200).json({
-      session: sanitized,
-      groupedByConceptTag,
-    });
+    const sessionObj = session.toObject();
+    sessionObj.questions = sessionObj.questions.map(({ correctIndex, ...rest }) => rest);
+    return res.status(200).json({ result: sessionObj });
   } catch (error) {
     console.log("Error in getCapstoneResult:", error.message);
     return res.status(500).json({ message: "Server error" });

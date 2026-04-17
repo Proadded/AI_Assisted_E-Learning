@@ -25,10 +25,16 @@ export const markWatched = async (req, res) => {
         const { videoId } = req.params;
         const studentId = req.user._id;
 
+        const video = await Video.findById(videoId).select("courseId").lean();
+
         let progress = await Progress.findOne({ studentId, videoId });
 
         if (!progress) {
-            progress = new Progress({ studentId, videoId });
+            progress = new Progress({ 
+                studentId, 
+                videoId,
+                courseId: video?.courseId || null
+            });
         }
 
         progress.watched = true;
@@ -36,6 +42,7 @@ export const markWatched = async (req, res) => {
 
         res.json({ message: "Marked as watched" });
     } catch (error) {
+        console.log("Error in markWatched:", error.message);
         res.status(500).json({ message: "Server error" });
     }
 };

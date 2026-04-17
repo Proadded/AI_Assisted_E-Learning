@@ -1,17 +1,20 @@
 import express from "express";
-import { protectRoute } from "../middleware/auth.middleware.js";
 import {
   getCapstoneStatus,
   generateCapstone,
   submitCapstone,
   getCapstoneResult,
 } from "../controllers/capstone.controller.js";
+import { protectRoute } from "../middleware/auth.middleware.js";
 
 const router = express.Router();
 
-router.get("/status/:courseId", protectRoute, getCapstoneStatus);
-router.post("/generate/:courseId", protectRoute, generateCapstone);
-router.post("/submit/:sessionId", protectRoute, submitCapstone);
-router.get("/result/:sessionId", protectRoute, getCapstoneResult);
+// All capstone routes require authentication
+router.use(protectRoute);
+
+router.get("/status/:courseId", getCapstoneStatus);
+router.post("/generate/:courseId", generateCapstone);
+router.post("/submit/:sessionId", submitCapstone);
+router.get("/result/:sessionId", getCapstoneResult);
 
 export default router;

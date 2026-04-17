@@ -1,5 +1,6 @@
 import { useEffect, useState, useMemo } from "react";
 import { useParams, useNavigate, useLocation } from "react-router-dom";
+import { io } from "socket.io-client";
 import useCapstoneStore from "../store/useCapstoneStore.js";
 
 // ─── Injected styles ─────────────────────────────────────────────────────────
@@ -345,9 +346,10 @@ const CapstonePage = () => {
     clearSession,
   } = useCapstoneStore();
 
-  // The API returns { session: {...} }, store sets session = res.data
-  const session = rawSession?.session ?? null;
-  const sessionId = session?._id ?? null;
+  // The API now returns { capstoneSessionId, questions, totalQuestions } directly inside res.data
+  // store sets session = res.data
+  const session = rawSession ?? null;
+  const sessionId = rawSession?.capstoneSessionId ?? null;
 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -386,6 +388,22 @@ const CapstonePage = () => {
       // Ignore storage errors (e.g., private mode quota)
     }
   }, [answers, sessionId]);
+
+  // ── 4. Socket.IO fallback navigation ─────────────────────────────────────
+  useEffect(() => {
+    const socket = io("http://localhost:3001", { withCredentials: true });
+
+    socket.on("capstone:result", ({ sessionId: resultSessionId, passed, score }) => {
+      if (sessionId && String(resultSessionId) === String(sessionId)) {
+        navigate(`/capstone/${courseId}/result/${resultSessionId}`);
+      }
+    });
+
+    return () => {
+      socket.off("capstone:result");
+      socket.disconnect();
+    };
+  }, [courseId, navigate, sessionId]);
 
   // ── Derived state ─────────────────────────────────────────────────────────
   const questions = session?.questions ?? [];

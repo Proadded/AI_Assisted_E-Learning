@@ -7,8 +7,8 @@ import LoginPage from './components/LoginPage'
 import DashboardPage from './components/DashboardPage'
 import CoursePage from './components/CoursePage'
 import CourseDetailPage from "./pages/CourseDetailPage.jsx";
-import CapstonePage from "./pages/CapstonePage.jsx";
-import CapstoneResultPage from "./pages/CapstoneResultPage.jsx";
+import CapstoneResultPage from "./components/CapstoneResultPage.jsx";
+import CapstonePage from "./components/CapstonePage.jsx";
 
 //Future pages
 import TutorPlaceholderPage from './components/TutorPlaceholderPage'
