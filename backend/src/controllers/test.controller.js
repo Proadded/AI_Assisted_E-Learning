@@ -160,16 +160,16 @@ async function finalizeResult(result, test, io) {
             // Fetch current fingerprint classifications for this student + course
             const fingerprints = await StudentFingerprint.find({
                 studentId: result.studentId,
-                courseId:  result.courseId,
+                courseId: result.courseId,
             }).select("conceptTag classification").lean();
 
-            const conceptualGaps    = fingerprints.filter(f => f.classification === "ConceptualGap").map(f => f.conceptTag);
+            const conceptualGaps = fingerprints.filter(f => f.classification === "ConceptualGap").map(f => f.conceptTag);
             const uncertainConcepts = fingerprints.filter(f => f.classification === "Uncertain").map(f => f.conceptTag);
 
             // Fetch recent test history for context
             const recentResults = await TestResult.find({
-                studentId:        result.studentId,
-                courseId:         result.courseId,
+                studentId: result.studentId,
+                courseId: result.courseId,
                 evaluationStatus: "complete",
             }).select("totalScore createdAt").sort({ createdAt: -1 }).limit(10).lean();
 
@@ -180,11 +180,11 @@ async function finalizeResult(result, test, io) {
             ]);
 
             const aiAnalysis = await generateAiAnalysis({
-                studentName:     student?.fullName || "Student",
-                courseTitle:     course?.title || "this course",
+                studentName: student?.fullName || "Student",
+                courseTitle: course?.title || "this course",
                 conceptualGaps,
                 uncertainConcepts,
-                testHistory:     recentResults.reverse(), // chronological order
+                testHistory: recentResults.reverse(), // chronological order
             });
 
             if (aiAnalysis) {
@@ -192,10 +192,10 @@ async function finalizeResult(result, test, io) {
                     { studentId: result.studentId, videoId: result.videoId },
                     {
                         $set: {
-                            "aiAnalysis.weakAreas":            aiAnalysis.weakAreas,
-                            "aiAnalysis.strengths":            aiAnalysis.strengths,
+                            "aiAnalysis.weakAreas": aiAnalysis.weakAreas,
+                            "aiAnalysis.strengths": aiAnalysis.strengths,
                             "aiAnalysis.personalizedFeedback": aiAnalysis.personalizedFeedback,
-                            "aiAnalysis.recommendations":      aiAnalysis.recommendations,
+                            "aiAnalysis.recommendations": aiAnalysis.recommendations,
                         }
                     }
                 );
@@ -220,7 +220,7 @@ async function finalizeResult(result, test, io) {
         if (io) {
             io.emit("context:updated", {
                 studentId: result.studentId.toString(),
-                courseId:  result.courseId.toString(),
+                courseId: result.courseId.toString(),
             });
         }
     } catch (e) {
@@ -230,7 +230,7 @@ async function finalizeResult(result, test, io) {
 
 async function checkCourseCompletion(studentId, courseId, io) {
     console.log("[CCC] fired", studentId, courseId);
-    
+
     // fetch all course videos
     const courseVideos = await Video.find({ courseId }).select("_id").lean();
     const courseVideoIds = courseVideos.map(v => v._id.toString());
@@ -248,7 +248,7 @@ async function checkCourseCompletion(studentId, courseId, io) {
     const videoIds = allTests.map(t => t.videoId).filter(Boolean);
 
     const progressDocs = await Progress.find({ studentId, videoId: { $in: videoIds } }).lean();
-    
+
     console.log("[CCC] videoIds:", videoIds.length, videoIds);
     console.log("[CCC] progressDocs:", progressDocs.length);
     console.log("[CCC] passed count:", progressDocs.filter(p => p.testScore >= 70).length);

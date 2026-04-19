@@ -248,7 +248,29 @@ async function aggregateProgressData(uid) {
 }
 
 async function aggregateFingerprintData(uid) {
-  const docs = await StudentFingerprint.find({ studentId: uid }).lean();
+  const docs = await StudentFingerprint.aggregate([
+    {
+      $match: {
+        studentId: uid,
+        classification: { $in: ["ConceptualGap", "Uncertain", "CarelessError"] },
+        conceptTag: { $type: "string", $ne: "" },
+        courseId: { $exists: true, $ne: null },
+      },
+    },
+    {
+      $project: {
+        _id: 1,
+        studentId: 1,
+        courseId: 1,
+        conceptTag: 1,
+        classification: 1,
+        fingerprintScore: 1,
+        attempts: 1,
+        lastComputedAt: 1,
+      },
+    },
+  ]);
+
   // Group by courseId
   return docs.reduce((acc, fp) => {
     const cid = fp.courseId.toString();
@@ -327,7 +349,8 @@ function formatFingerprintSummary(fp) {
     classification:   fp.classification,
     fingerprintScore: fp.fingerprintScore,
     attempts:         fp.attempts,
-    hasMinimumData:   fp.attempts >= 3,
+    // Trust engine output, not a second local threshold calculation.
+    hasMinimumData:   fp.fingerprintScore !== null,
     lastComputedAt:   fp.lastComputedAt?.toISOString?.() || fp.lastComputedAt || null,
   };
 }

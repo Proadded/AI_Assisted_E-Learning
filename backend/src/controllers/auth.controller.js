@@ -63,7 +63,6 @@ export const signup = async (req, res) => {
       return res.status(201).json({
         _id: savedUser._id,
         fullName: savedUser.fullName,
-        password: savedUser.password,
         email: savedUser.email,
         role: savedUser.role,
       });
@@ -99,7 +98,6 @@ export const login = async (req, res) => {
     return res.status(200).json({
       _id: user._id,
       fullName: user.fullName,
-      password: user.password,
       email: user.email,
       role: user.role,
     });
@@ -119,12 +117,12 @@ export const logout = (req, res) => {
   }
 };
 
-export const checkAuth = (req, res) => {
+export const checkAuth = async (req, res) => {
   try {
     res.status(200).json(req.user);
   } catch (error) {
-    console.log("Error in checkAuth controller", error.message);
-    res.status(500).json({ message: "Internal Server Error" });
+    console.log("Error in checkAuth controller:", error.message);
+    res.status(500).json({ message: "Internal Server error" });
   }
 };
 
