@@ -187,8 +187,13 @@ export const generateCapstone = async (req, res) => {
 
     console.log("[generateCapstone] studentId:", studentId, typeof studentId);
     console.log("[generateCapstone] courseId:", courseId, typeof courseId, "→ ObjectId:", courseObjId);
-    const fingerprints = await StudentFingerprint.find({ studentId, courseId: courseObjId });
-    console.log("[generateCapstone] fingerprints found:", fingerprints.length);
+    const fingerprints = await StudentFingerprint.find({ 
+      studentId: new mongoose.Types.ObjectId(studentId), 
+      courseId: courseObjId 
+    });
+    console.log(`[Capstone DEBUG] fingerprints found: ${fingerprints.length}`);
+    console.log(`[Capstone DEBUG] fingerprint classifications:`, fingerprints.map(f => ({ tag: f.conceptTag, classification: f.classification })));
+    console.log(`[Capstone DEBUG] gapTags will be:`, fingerprints.filter(f => f.classification === "ConceptualGap").map(f => f.conceptTag));
     const allTests = await Test.find({ courseId: courseObjId });
     console.log("[generateCapstone] tests found:", allTests.length);
 
@@ -266,6 +271,8 @@ export const generateCapstone = async (req, res) => {
     const selectedQuestions = [];
     const deficitsByTag = {};
     const bucketTargets = buildBucketTargets();
+    const difficulty = course?.difficulty || "intermediate";
+    const mappedDifficulty = { beginner: "easy", intermediate: "medium", advanced: "hard" }[difficulty] || "medium";
 
     const takeFromTag = (tag) => {
       const pool = seedPoolByTag[tag] || [];
@@ -280,16 +287,69 @@ export const generateCapstone = async (req, res) => {
       return false;
     };
 
-    for (const bucket of Object.keys(bucketTargets)) {
-      const tags = conceptTagsByBucket[bucket];
-      const targetCount = bucketTargets[bucket];
+    // ── STEP 1: AI-generate questions for ALL ConceptualGap concepts first ────
+    const gapTags = conceptTagsByBucket["ConceptualGap"] || [];
+    const gapTarget = bucketTargets["ConceptualGap"] || 0;
+    const perGapTag = gapTags.length > 0 ? Math.ceil(gapTarget / gapTags.length) : 0;
+
+    console.log(`[Capstone] ConceptualGap concepts: ${JSON.stringify(gapTags)}, target: ${gapTarget}, per tag: ${perGapTag}`);
+
+    for (const tag of gapTags) {
+      if (selectedQuestions.length >= CAPSTONE_TOTAL_QUESTIONS) break;
+      const remaining = CAPSTONE_TOTAL_QUESTIONS - selectedQuestions.length;
+      const countToRequest = Math.min(perGapTag, remaining);
+      if (countToRequest <= 0) continue;
+
+      console.log(`[Capstone] Requesting ${countToRequest} AI questions for ConceptualGap tag: ${tag}`);
+
+      try {
+        const aiCandidates = await generateCapstoneMCQ({
+          conceptTag: tag,
+          courseTitle: course.title,
+          count: countToRequest,
+          difficulty,
+          existingQuestions: selectedQuestions,
+        });
+
+        const validAiQuestions = (aiCandidates || []).filter(q => validateAiQuestion(q, tag, mappedDifficulty));
+        console.log(`[Capstone] Got ${validAiQuestions.length} valid AI questions for tag: ${tag}`);
+
+        for (const q of validAiQuestions) {
+          if (selectedQuestions.length >= CAPSTONE_TOTAL_QUESTIONS) break;
+          const signature = `${q.conceptTag}::${q.stem}`;
+          if (usedSignatures.has(signature)) continue;
+          usedSignatures.add(signature);
+          selectedQuestions.push({
+            questionId: null,
+            stem: q.stem,
+            options: [...q.options],
+            correctIndex: q.correctIndex,
+            conceptTag: q.conceptTag,
+            questionSource: "ai_generated",
+          });
+        }
+
+        // If AI returned fewer than needed, note the shortfall for seed backfill
+        const aiGot = validAiQuestions.length;
+        if (aiGot < countToRequest) {
+          deficitsByTag[tag] = (deficitsByTag[tag] || 0) + (countToRequest - aiGot);
+          console.log(`[Capstone] AI shortfall for ${tag}: needed ${countToRequest}, got ${aiGot}. Will backfill from seed.`);
+        }
+      } catch (err) {
+        console.log(`[Capstone] AI generation failed for ${tag}:`, err.message);
+        deficitsByTag[tag] = (deficitsByTag[tag] || 0) + countToRequest;
+      }
+    }
+
+    // ── STEP 2: Seed-based selection for Uncertain + CarelessError buckets ────
+    for (const bucket of ["Uncertain", "CarelessError"]) {
+      const tags = conceptTagsByBucket[bucket] || [];
+      const targetCount = bucketTargets[bucket] || 0;
       let pickedForBucket = 0;
       let madeProgress = true;
       let cursor = 0;
 
-      if (!tags.length) {
-        continue;
-      }
+      if (!tags.length) continue;
 
       while (
         selectedQuestions.length < CAPSTONE_TOTAL_QUESTIONS &&
@@ -315,7 +375,7 @@ export const generateCapstone = async (req, res) => {
       }
     }
 
-    // Backfill from any remaining seeded pool before AI generation.
+    // ── STEP 3: Seed backfill for any remaining slots ─────────────────────────
     const allTags = [...allRequestedTags];
     let keepBackfilling = true;
     while (selectedQuestions.length < CAPSTONE_TOTAL_QUESTIONS && keepBackfilling && allTags.length) {
@@ -326,8 +386,7 @@ export const generateCapstone = async (req, res) => {
       }
     }
 
-    // Request AI questions only where seeded supply is short.
-    const difficulty = course?.difficulty || "intermediate";
+    // ── STEP 4: AI backfill for any remaining deficits (safety net) ───────────
     for (const [tag, missingCount] of Object.entries(deficitsByTag)) {
       if (selectedQuestions.length >= CAPSTONE_TOTAL_QUESTIONS) break;
       if (!missingCount || missingCount <= 0) continue;
@@ -340,24 +399,14 @@ export const generateCapstone = async (req, res) => {
         existingQuestions: selectedQuestions,
       });
 
-      const mappedDifficulty = { beginner: "easy", intermediate: "medium", advanced: "hard" }[difficulty] || "medium";
       const validAiQuestions = (aiCandidates || []).filter(q => validateAiQuestion(q, tag, mappedDifficulty));
-      
+
       const discardCount = (aiCandidates || []).length - validAiQuestions.length;
       if (discardCount > 0) {
         console.log(`[Capstone] Discarded ${discardCount} invalid AI questions for tag: ${tag}`);
       }
 
-      let finalAiQuestions = validAiQuestions;
-      if (course?.allowedConceptTags?.length > 0) {
-        finalAiQuestions = validAiQuestions.filter(q => course.allowedConceptTags.includes(q.conceptTag));
-        const allowedDiscardCount = validAiQuestions.length - finalAiQuestions.length;
-        if (allowedDiscardCount > 0) {
-          console.log(`[Capstone] Discarded ${allowedDiscardCount} AI questions for tag: ${tag} due to allowedConceptTags constraint`);
-        }
-      }
-
-      for (const q of finalAiQuestions) {
+      for (const q of validAiQuestions) {
         if (selectedQuestions.length >= CAPSTONE_TOTAL_QUESTIONS) break;
         const signature = `${q.conceptTag}::${q.stem}`;
         if (usedSignatures.has(signature)) continue;
