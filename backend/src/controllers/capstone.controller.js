@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import CapstoneSession from "../models/capstoneSession.model.js";
 import StudentFingerprint from "../models/fingerprint.model.js";
 import Progress from "../models/progress.model.js";
@@ -102,12 +103,13 @@ export const getCapstoneStatus = async (req, res) => {
   try {
     const { courseId } = req.params;
     const studentId = req.user?._id;
+    const courseObjId = new mongoose.Types.ObjectId(courseId);
 
-    const tests = await Test.find({ courseId }).select("videoId").lean();
+    const tests = await Test.find({ courseId: courseObjId }).select("videoId").lean();
     const videoIds = tests.map(t => t.videoId).filter(Boolean);
 
     const [latestSession, progressDocs] = await Promise.all([
-      CapstoneSession.findOne({ studentId, courseId }).sort({ generatedAt: -1 }).lean(),
+      CapstoneSession.findOne({ studentId, courseId: courseObjId }).sort({ generatedAt: -1 }).lean(),
       Progress.find({ studentId, videoId: { $in: videoIds } }).select("testTaken testScore allTestsPassed capstonePassed").lean(),
     ]);
 
@@ -138,12 +140,13 @@ export const generateCapstone = async (req, res) => {
   try {
     const { courseId } = req.params;
     const studentId = req.user?._id;
+    const courseObjId = new mongoose.Types.ObjectId(courseId);
 
-    const tests = await Test.find({ courseId }).select("videoId").lean();
+    const tests = await Test.find({ courseId: courseObjId }).select("videoId").lean();
     const videoIds = tests.map(t => t.videoId).filter(Boolean);
 
     const [course, progressDocs] = await Promise.all([
-      Course.findById(courseId).select("title difficulty allowedConceptTags").lean(),
+      Course.findById(courseObjId).select("title difficulty allowedConceptTags").lean(),
       Progress.find({ studentId, videoId: { $in: videoIds } }).select("testTaken testScore allTestsPassed").lean(),
     ]);
 
@@ -158,7 +161,7 @@ export const generateCapstone = async (req, res) => {
 
     const activeCooldownSession = await CapstoneSession.findOne({
       studentId,
-      courseId,
+      courseId: courseObjId,
       status: "failed",
       cooldownUntil: { $gt: new Date() },
     })
@@ -172,7 +175,7 @@ export const generateCapstone = async (req, res) => {
       });
     }
 
-    const pendingSession = await CapstoneSession.findOne({ studentId, courseId, status: "pending" });
+    const pendingSession = await CapstoneSession.findOne({ studentId, courseId: courseObjId, status: "pending" }).lean();
     if (pendingSession) {
       const clientQuestions = pendingSession.questions.map(({ correctIndex, ...rest }) => rest);
       return res.status(200).json({
@@ -182,9 +185,33 @@ export const generateCapstone = async (req, res) => {
       });
     }
 
-    const fingerprints = await StudentFingerprint.find({ studentId, courseId })
-      .select("conceptTag classification fingerprintScore")
-      .lean();
+    console.log("[generateCapstone] studentId:", studentId, typeof studentId);
+    console.log("[generateCapstone] courseId:", courseId, typeof courseId, "→ ObjectId:", courseObjId);
+    const fingerprints = await StudentFingerprint.find({ studentId, courseId: courseObjId });
+    console.log("[generateCapstone] fingerprints found:", fingerprints.length);
+    const allTests = await Test.find({ courseId: courseObjId });
+    console.log("[generateCapstone] tests found:", allTests.length);
+
+    // --- Build conceptsToTest (fingerprint-aware or seeded fallback) ---
+    let conceptsToTest = fingerprints
+      .filter((f) => typeof f.conceptTag === "string" && f.conceptTag.trim())
+      .map((f) => f.conceptTag);
+
+    if (conceptsToTest.length === 0) {
+      // No fingerprints yet — fall back to pulling concepts from seeded tests
+      const courseTests = await Test.find({ courseId: courseObjId }).select("questions").lean();
+      const rawTags = courseTests
+        .flatMap((t) => (t.questions || []).map((q) => q.conceptTag))
+        .filter(Boolean);
+      conceptsToTest = [...new Set(rawTags)]; // dedupe
+      console.log("[generateCapstone] fingerprint fallback — concepts from seeded tests:", conceptsToTest);
+    }
+
+    if (conceptsToTest.length === 0) {
+      return res.status(400).json({
+        message: "No concepts found for this course. Seed tests must have conceptTag fields.",
+      });
+    }
 
     const conceptTagsByBucket = {
       ConceptualGap: [],
@@ -192,15 +219,25 @@ export const generateCapstone = async (req, res) => {
       CarelessError: [],
     };
 
-    for (const fp of fingerprints) {
-      if (!conceptTagsByBucket[fp.classification]) continue;
-      if (typeof fp.conceptTag !== "string" || !fp.conceptTag.trim()) continue;
-      if (!conceptTagsByBucket[fp.classification].includes(fp.conceptTag)) {
-        conceptTagsByBucket[fp.classification].push(fp.conceptTag);
+    if (fingerprints.length > 0) {
+      // Use actual fingerprint classifications
+      for (const fp of fingerprints) {
+        if (!conceptTagsByBucket[fp.classification]) continue;
+        if (typeof fp.conceptTag !== "string" || !fp.conceptTag.trim()) continue;
+        if (!conceptTagsByBucket[fp.classification].includes(fp.conceptTag)) {
+          conceptTagsByBucket[fp.classification].push(fp.conceptTag);
+        }
       }
+    } else {
+      // No fingerprints — distribute all concepts round-robin across buckets
+      const bucketKeys = Object.keys(conceptTagsByBucket);
+      conceptsToTest.forEach((tag, idx) => {
+        conceptTagsByBucket[bucketKeys[idx % bucketKeys.length]].push(tag);
+      });
+      console.log("[generateCapstone] round-robin bucket assignment:", conceptTagsByBucket);
     }
 
-    const allTaggedTests = await Test.find({ courseId, "questions.type": "mcq" })
+    const allTaggedTests = await Test.find({ courseId: courseObjId, "questions.type": "mcq" })
       .select("questions")
       .lean();
 
@@ -352,7 +389,7 @@ export const generateCapstone = async (req, res) => {
       };
     });
 
-    const previousAttempts = await CapstoneSession.countDocuments({ studentId, courseId });
+    const previousAttempts = await CapstoneSession.countDocuments({ studentId, courseId: courseObjId });
     const attemptNumber = previousAttempts + 1;
 
     const fingerprintSnapshot = fingerprints.map((fp) => ({
@@ -363,7 +400,7 @@ export const generateCapstone = async (req, res) => {
 
     const session = await CapstoneSession.create({
       studentId,
-      courseId,
+      courseId: courseObjId,
       status: "pending",
       questions: finalQuestions,
       fingerprintSnapshot,
@@ -374,8 +411,9 @@ export const generateCapstone = async (req, res) => {
       cooldownUntil: null,
     });
 
-    const clientQuestions = session.questions.map(({ correctIndex, ...rest }) => rest);
-    return res.status(201).json({ capstoneSessionId: session._id, questions: clientQuestions, totalQuestions: clientQuestions.length });
+    const sessionObj = session.toObject();
+    const clientQuestions = sessionObj.questions.map(({ correctIndex, ...rest }) => rest);
+    return res.status(201).json({ capstoneSessionId: sessionObj._id, questions: clientQuestions, totalQuestions: clientQuestions.length });
   } catch (error) {
     console.log("Error in generateCapstone:", error.message);
     return res.status(500).json({ message: "Server error" });
@@ -441,15 +479,17 @@ export const submitCapstone = async (req, res) => {
     await session.save();
 
     if (passed) {
-      await Progress.findOneAndUpdate(
-        { studentId, courseId: session.courseId },
+      const tests = await Test.find({ courseId: session.courseId }).select("videoId").lean();
+      const videoIds = tests.map((t) => t.videoId).filter(Boolean);
+
+      await Progress.updateMany(
+        { studentId, videoId: { $in: videoIds } },
         {
           $set: {
             capstonePassed: true,
             jscapstoneSessionId: session._id,
           },
-        },
-        { upsert: true }
+        }
       );
     }
 

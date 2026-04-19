@@ -1158,3 +1158,63 @@ Tasks in order: fingerprintEngine.service.js → updateFingerprintsFromResult �
 
 1. **Progress docs created before `markWatched` fix have no `courseId`** — requires one-time Atlas bulk update or migration script for existing data. New docs fine going forward.
 2. **`jscapstoneSessionId` field on Progress** — appears in Atlas docs (likely a schema naming bug — should be `capstoneSessionId`). Check `progress.model.js` field name matches what capstone controller writes.
+
+### 2026-04-19 — Capstone System Debug & Fix Session
+
+**Bugs found and fixed:**
+
+1. Route param order mismatch — capstone generate route was defined as 
+   /:courseId/generate on backend but frontend called /generate/:courseId. 
+   Fixed capstone.route.js to match frontend URL pattern. Also added missing 
+   protectRoute middleware to all capstone routes.
+
+2. ObjectId/String type mismatch — courseId and studentId passed as strings 
+   to MongoDB queries in capstone.controller.js but schema fields are ObjectId. 
+   Fixed by casting with new mongoose.Types.ObjectId(courseId) in all queries 
+   inside generateCapstone and getCapstoneStatus.
+
+3. Zero questions generated — StudentFingerprint.find() returned empty because 
+   of the ObjectId mismatch above. Added fallback: if fingerprints empty, pull 
+   conceptTags from seeded Test questions for the course and distribute them 
+   round-robin across buckets.
+
+4. Mongoose subdocument wrappers leaking to frontend — session.questions sent 
+   to frontend contained Mongoose proxy objects (__parentArray, _doc, $__parent) 
+   instead of plain JS objects. Fixed by calling session.toObject() before 
+   mapping clientQuestions in the new session path, and .lean() on the pending 
+   session query.
+
+5. Stale pending session with bad data — existing CapstoneSession documents in 
+   DB had Mongoose-wrapper data baked in from before the fix. Resolved by 
+   creating a new test user so a fresh session was generated through the fixed 
+   code path.
+
+6. Zustand store destructure alias bug — useCapstoneStore destructured as 
+   { session: rawSession } caused stale null reads. Fixed by switching to 
+   individual selectors: useCapstoneStore((state) => state.session) etc.
+
+7. submitCapstone Progress upsert schema error — submitCapstone tried to upsert 
+   Progress with { studentId, courseId } filter but Progress schema has no 
+   courseId field (strict mode). Fixed by querying Test.find({ courseId }) to 
+   get videoIds, then using Progress.updateMany({ studentId, videoId: { $in: videoIds } }).
+
+**Files modified:**
+- backend/src/controllers/capstone.controller.js
+- backend/src/routes/capstone.route.js  
+- frontend/src/store/useCapstoneStore.js (selector pattern)
+- frontend/src/components/CapstonePage.jsx (selector pattern + session shape fix)
+
+**Verified working end-to-end:**
+- New user created, watched all 13 videos, passed all tests
+- Capstone unlocked correctly via getCapstoneStatus
+- generateCapstone produces 20 questions from fingerprints (14 found) + seeded pool
+- Questions and options render correctly on CapstonePage
+- Submit completes successfully
+
+**Known remaining cleanup:**
+- Remove temporary console.log debug statements from capstone.controller.js 
+  and CapstonePage.jsx added during this debug session
+- Delete dead code: frontend/src/pages/CapstonePage.jsx is never imported 
+  by App.jsx and should be removed
+- The temporary /clear-test/:studentId route added to capstone.route.js 
+  should be removed if it was successfully registered

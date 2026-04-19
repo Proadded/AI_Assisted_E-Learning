@@ -335,21 +335,19 @@ const CapstonePage = () => {
   // Course name from Link state (passed by CapstoneStatusCard or CoursePage), fallback to "Final Exam"
   const courseName = location.state?.courseName ?? "Final Exam";
 
-  const {
-    session: rawSession,
-    answers,
-    isLoading,
-    error,
-    generateSession,
-    setAnswer,
-    submitCapstone,
-    clearSession,
-  } = useCapstoneStore();
+  const session = useCapstoneStore((state) => state.session);
+  const answers = useCapstoneStore((state) => state.answers);
+  const isLoading = useCapstoneStore((state) => state.isLoading);
+  const error = useCapstoneStore((state) => state.error);
+  const generateSession = useCapstoneStore((state) => state.generateSession);
+  const setAnswer = useCapstoneStore((state) => state.setAnswer);
+  const submitCapstone = useCapstoneStore((state) => state.submitCapstone);
+  const clearSession = useCapstoneStore((state) => state.clearSession);
 
   // The API now returns { capstoneSessionId, questions, totalQuestions } directly inside res.data
   // store sets session = res.data
-  const session = rawSession ?? null;
-  const sessionId = rawSession?.capstoneSessionId ?? null;
+  const sessionId = session?.capstoneSessionId ?? null;
+  console.log("[DEBUG] session:", session, "sessionId:", sessionId);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
@@ -440,6 +438,7 @@ const CapstonePage = () => {
   const handleBack = () => navigate(-1);
 
   // ── Render: full-page loading ─────────────────────────────────────────────
+  console.log("[GUARD] isLoading:", isLoading, "session:", !!session, "error:", error);
   if (isLoading && !session) {
     return (
       <div className="cap-spinner-page">
@@ -483,6 +482,7 @@ const CapstonePage = () => {
   }
 
   // ── Render: exam UI ──────────────────────────────────────────────────────
+  console.log("[RENDER] reaching exam UI, questions:", session?.questions?.length);
   return (
     <div className="cap-root">
       <style dangerouslySetInnerHTML={{ __html: STYLES }} />
@@ -511,6 +511,8 @@ const CapstonePage = () => {
       <div className="cap-content">
         <div className="cap-questions">
           {questions.map((q, qIdx) => {
+            console.log("[Q]", qIdx, q?.stem, q?.options?.length);
+            console.log("[Q-FULL]", qIdx, JSON.stringify(q));
             const selectedOption = answers[qIdx] ?? null;
 
             return (

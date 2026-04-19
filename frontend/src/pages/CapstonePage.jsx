@@ -345,9 +345,9 @@ const CapstonePage = () => {
     clearSession,
   } = useCapstoneStore();
 
-  // The API returns { session: {...} }, store sets session = res.data
-  const session = rawSession?.session ?? null;
-  const sessionId = session?._id ?? null;
+  // The API returns { capstoneSessionId, questions, totalQuestions }, store sets session = res.data
+  const session = rawSession ?? null;
+  const sessionId = session?.capstoneSessionId ?? null;
 
   const [isSubmitting, setIsSubmitting] = useState(false);
 
