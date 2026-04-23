@@ -15,6 +15,7 @@ import progressRoutes from "./routes/progress.route.js";
 import studentContextRoutes from "./routes/studentContext.route.js";
 import dashboardRoutes from "./routes/dashboard.route.js";
 import capstoneRoutes from "./routes/capstone.route.js";
+import chatRoutes from "./routes/chat.route.js";
 import "./lib/cascadeHooks.js";
 
 const app = express();
@@ -35,6 +36,7 @@ app.use("/api/progress", progressRoutes);
 app.use("/api/student-context", studentContextRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/capstone", capstoneRoutes);
+app.use("/api/chat", chatRoutes);
 
 
 const PORT = process.env.PORT;

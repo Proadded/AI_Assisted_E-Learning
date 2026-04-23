@@ -4,6 +4,7 @@ import StudentFingerprint from "../models/fingerprint.model.js";
 import Progress from "../models/progress.model.js";
 import Test from "../models/quiz.model.js";
 import Course from "../models/course.model.js";
+import CuriosityLog from "../models/curiosityLog.model.js";
 import { generateCapstoneMCQ } from "../lib/aiEvaluator.js";
 
 const CAPSTONE_TOTAL_QUESTIONS = 20;
@@ -191,6 +192,22 @@ export const generateCapstone = async (req, res) => {
       studentId: new mongoose.Types.ObjectId(studentId), 
       courseId: courseObjId 
     });
+
+    // ── Curiosity boost: promote Uncertain → ConceptualGap if asked 3+ times ──
+    const CURIOSITY_THRESHOLD = 3;
+
+    const curiosityCounts = await CuriosityLog.aggregate([
+      { $match: { 
+          studentId: new mongoose.Types.ObjectId(studentId), 
+          courseId: courseObjId 
+      }},
+      { $group: { _id: "$conceptTag", askCount: { $sum: 1 } }},
+      { $sort: { askCount: -1 } }
+    ]);
+
+    const curiosityBoost = {};
+    curiosityCounts.forEach(c => { curiosityBoost[c._id] = c.askCount; });
+
     console.log(`[Capstone DEBUG] fingerprints found: ${fingerprints.length}`);
     console.log(`[Capstone DEBUG] fingerprint classifications:`, fingerprints.map(f => ({ tag: f.conceptTag, classification: f.classification })));
     console.log(`[Capstone DEBUG] gapTags will be:`, fingerprints.filter(f => f.classification === "ConceptualGap").map(f => f.conceptTag));
@@ -231,6 +248,19 @@ export const generateCapstone = async (req, res) => {
         if (typeof fp.conceptTag !== "string" || !fp.conceptTag.trim()) continue;
         if (!conceptTagsByBucket[fp.classification].includes(fp.conceptTag)) {
           conceptTagsByBucket[fp.classification].push(fp.conceptTag);
+        }
+      }
+
+      // After conceptTagsByBucket is populated, add this promotion loop:
+      for (const fp of fingerprints) {
+        if (
+          fp.classification === "Uncertain" &&
+          (curiosityBoost[fp.conceptTag] || 0) >= CURIOSITY_THRESHOLD
+        ) {
+          conceptTagsByBucket["ConceptualGap"].push(fp.conceptTag);
+          conceptTagsByBucket["Uncertain"] = conceptTagsByBucket["Uncertain"]
+            .filter(t => t !== fp.conceptTag);
+          console.log(`[Capstone] Curiosity-promoted: ${fp.conceptTag} (asked ${curiosityBoost[fp.conceptTag]}x)`);
         }
       }
     } else {

@@ -1,5 +1,6 @@
 import React from 'react'
 import useAuthStore from '../store/useAuthStore'
+import ChatbotPopup from './ChatbotPopup'
 
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display:ital@0;1&family=DM+Sans:wght@300;400;500;600&family=DM+Mono:wght@400;500&display=swap');
@@ -157,6 +158,7 @@ const Navbar = () => {
 
     return (
         <>
+            <ChatbotPopup />
             <style dangerouslySetInnerHTML={{ __html: CSS }} />
             <nav className="nb-root">
 

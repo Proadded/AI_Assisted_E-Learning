@@ -1268,3 +1268,65 @@ Completed three technical tasks: unit test framework setup with comprehensive co
 - ✅ Socket.IO listener pattern validated against existing DashboardPage implementation
 
 **Next steps:** Continue with post-capstone remaining work and hardening tasks documented in `post_capstone_remaining.md`.
+
+### 2026-04-20 — AI-First Capstone Generation Fix + Fingerprint Diagnostics
+
+**Session Summary:**
+Diagnosed and fixed critical bugs in the capstone question generation pipeline preventing AI-generated questions from being served for ConceptualGap concepts. Root causes identified: ObjectId/String type mismatch in fingerprint queries, stale pending sessions blocking regeneration, and bucket-filling logic that always sourced from seeded pool before attempting AI generation. Restructured generateCapstone to prioritize ConceptualGap concepts through AI generation first, followed by seeded fallback for other classifications.
+
+**Bugs Found and Fixed:**
+
+1. **ObjectId/String type mismatch in fingerprint queries** — `getCapstoneStatus` and `generateCapstone` were passing `studentId` as a raw string to MongoDB queries. The `studentfingerprints` collection stores `studentId` as `ObjectId`, causing all fingerprint queries to return empty arrays. Fixed by casting with `new mongoose.Types.ObjectId(studentId)` in the fingerprint fetch inside `generateCapstone`.
+
+2. **Stale pending CapstoneSession being returned** — `generateCapstone` checks for existing pending sessions and returns them unchanged. After fixing the ObjectId bug, an old session was still in the database and being served repeatedly. Fixed by deleting the stale session document (`69e4cfb22fa1896972b8d398`) from the `capstonesessions` collection before re-testing via temporary seed script.
+
+3. **AI generation never triggered despite fingerprint data existing** — The bucket-filling loop was always finding sufficient seeded questions to meet targets (5 per concept × 14 concepts = 70 questions; bucket targets = 10 ConceptualGap + 6 Uncertain + 4 CarelessError = 20 total). This caused `deficitsByTag` to remain empty, and the AI backfill path never executed. Fixed by restructuring `generateCapstone` to route all ConceptualGap concepts through `generateCapstoneMCQ()` first (Step 1), before touching the seeded pool for other classifications (Step 2–4).
+
+4. **SCS dashboard showing different classifications than MongoDB** — `studentContext.service.js` was re-deriving fingerprint readiness locally using `attempts >= 3` as a `hasMinimumData` check, producing classifications that didn't match the real `studentfingerprints` collection. Fixed by switching to `fingerprintScore !== null` as the validity check and tightening the aggregation to only return engine-valid fingerprint rows with a non-null `classification` and non-empty `conceptTag`.
+
+5. **Only 4 of 14 capstone bank concept tags were seeded** — The `seedTests.js` script had only partially seeded the `isReusable: true` capstone bank (math-methods, classes, async-await, fetch-api only). The remaining 10 concept tags were missing. Fixed by re-running `seedTests.js` which seeded all 14 concept bank test documents.
+
+6. **Per-video test results pointing to deleted test IDs** — After re-seeding, existing `TestResult` documents referenced old test `_id` values that no longer existed. The fingerprint engine's join from `TestResult` → `Test` → `question.conceptTag` silently failed. Fixed by the student retaking all tests against the new seeded test IDs, generating fresh `TestResult` documents.
+
+**Debugging Approach Used:**
+
+- Queried `studentfingerprints`, `tests`, `capstonesessions`, and `testresults` collections directly in MongoDB Atlas to identify missing data and type mismatches
+- Added `[Capstone DEBUG]` console logs immediately after the fingerprint fetch to confirm ObjectId fix and verify `gapTags` population
+- Created `backend/src/seed/seedFingerprints.js` (not committed) to directly insert 14 crafted fingerprint documents with realistic counter values and pre-computed classifications, bypassing the need to manually take tests
+
+**New Files Created:**
+- `backend/src/seed/seedFingerprints.js` — temporary debug seed script, not committed (contains hardcoded ObjectIds for specific test user)
+
+**Modified Files:**
+- `backend/src/controllers/capstone.controller.js` — ObjectId cast fix on fingerprint query (line 195) + full restructure of bucket-filling logic to route ConceptualGap concepts through AI generation first (4-step pipeline: Step 1 ConceptualGap AI-first, Step 2 Uncertain/CarelessError seeded, Step 3 seed backfill, Step 4 AI safety net)
+- `backend/src/services/studentContext.service.js` — tightened fingerprint aggregation, changed `hasMinimumData` from `attempts >= 3` to `fingerprintScore !== null`
+- `backend/src/seed/seedFingerprints.js` — added temporary deleteOne call to remove stale capstone session before fingerprint reseeding (not committed)
+
+**Verified Working End-to-End:**
+
+- ✅ 14 fingerprint documents inserted for test student with 4 ConceptualGap (loops, dom-manipulation, async-await, operators), 5 Uncertain (arrays, game-logic, event-handling, classes, conditionals), 5 CarelessError (js-basics, functions, string-methods, math-methods, fetch-api) classifications
+- ✅ Dashboard Understanding Depth panel correctly shows 4 Needs Work, 5 Tracking, 5 Minor Slips matching MongoDB exactly
+- ✅ Capstone generates 20 questions with 12 AI-generated (`questionSource: "ai_generated"`) from ConceptualGap concepts and 8 seeded from Uncertain/CarelessError concepts (10 target ConceptualGap / 14 tags per ConceptualGap tag ≈ 1–2 AI questions per tag, totaling ~12 AI questions in a 20-question exam)
+- ✅ AI questions are scenario-based and code-contextual, significantly higher quality than seeded questions
+- ✅ `generateCapstoneMCQ()` called sequentially once per ConceptualGap concept tag (max 4 calls per exam), well within Gemini API rate limits
+- ✅ Debug logs confirm gapTags population and AI question count before/after filtering
+
+**Known Remaining Items:**
+
+- `seedFingerprints.js` should not be committed — it contains hardcoded ObjectIds for a specific test user
+- Real students need to take enough tests with the re-seeded conceptTag-populated questions for the fingerprint engine to produce organic ConceptualGap classifications
+- AI-grading of capstone answers (checking correctness via AI for `ai_generated` questions) is the next feature to implement
+- `allowedConceptTags` filtering removed from AI backfill loop (Step 4) — may need to be reapplied if concept tag restrictions should apply to safety-net AI questions
+
+### 2026-04-23 — Chatbot Integration & CuriosityLog Implementation
+
+**Session Summary:**
+Implemented the foundational backend data model, routing, and frontend state management for the AI Chatbot feature. The implementation was guided by and strictly adheres to the `chatbot_plan.md` original plan.
+
+**Backend Changes:**
+- Created `backend/src/models/curiosityLog.model.js` — Mongoose schema for `CuriosityLog` with compound indexes for frequency and timeline aggregation to track student questions (`studentId`, `courseId`, `conceptTag`, `rawQuestion`).
+- Created `backend/src/routes/chat.route.js` — routing module for `/message` and `/curiosity-summary` endpoints, secured with `protectRoute` middleware and linked to `chat.controller.js`.
+
+**Frontend Changes:**
+- Created `frontend/src/store/useChatStore.js` — Zustand store for chat session state, handling `isOpen`, `history` (capped to 20 messages), `isLoading`, `error`, and optimistic updates via `axiosInstance`.
+- Integrated `ChatbotPopup` into `frontend/src/components/Navbar.jsx` to enable seamless access to the AI tutoring feature.

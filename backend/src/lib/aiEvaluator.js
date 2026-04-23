@@ -306,3 +306,164 @@ Rules:
     return null;
   }
 }
+
+export const classifyAndTag = async (message, courseId) => {
+    try {
+        const tagModel = genAI.getGenerativeModel({ 
+            model: "gemini-2.5-flash-lite",
+            generationConfig: { maxOutputTokens: 60 }
+        });
+
+        const prompt = `You are classifying a student's message on an e-learning platform.
+Return ONLY a raw JSON object with no markdown, no explanation, no code fences.
+
+Rules:
+- isCourseRelated: true if the message is about programming, JavaScript, web development, 
+  computer science, studying, or the student asking about THEMSELVES 
+  (their progress, their learning, what they know, how they are doing, their scores).
+- isCourseRelated: false ONLY if completely unrelated (weather, sports, cooking, etc.)
+- conceptTag: extract a JS concept tag like "async-await", "dom-manipulation", "loops" 
+  if the message maps to a specific concept. Otherwise null.
+
+Examples:
+"how does async/await work?" → { "isCourseRelated": true, "conceptTag": "async-await" }
+"what do you know about me?" → { "isCourseRelated": true, "conceptTag": null }
+"what do you know about my learnings?" → { "isCourseRelated": true, "conceptTag": null }
+"how am I doing?" → { "isCourseRelated": true, "conceptTag": null }
+"explain loops" → { "isCourseRelated": true, "conceptTag": "loops" }
+"what is the weather today?" → { "isCourseRelated": false, "conceptTag": null }
+"what is my progress?" → { "isCourseRelated": true, "conceptTag": null }
+
+Message to classify: "${message}"`;
+
+        const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+        const delays = [2000, 4000, 8000];
+        let result;
+
+        for (let attempt = 0; attempt <= 3; attempt++) {
+            try {
+                result = await tagModel.generateContent(prompt);
+                break;
+            } catch (error) {
+                const msg = error.message || "";
+                const isRetryable = msg.includes("503") || msg.includes("Service Unavailable") || msg.includes("high demand");
+
+                if (isRetryable && attempt < 3) {
+                    await sleep(delays[attempt]);
+                } else {
+                    throw error;
+                }
+            }
+        }
+
+        const raw = result.response.text().trim();
+
+        try {
+            return JSON.parse(raw);
+        } catch {
+            const cleaned = raw.replace(/^```json\s*/i, "").replace(/```\s*$/, "").trim();
+            return JSON.parse(cleaned);
+        }
+    } catch (err) {
+        console.log("classifyAndTag failed:", err.message);
+        return { isCourseRelated: true, conceptTag: null };
+    }
+};
+
+export const generateChatReply = async ({ message, history, studentContext, isCourseRelated }) => {
+    try {
+        let systemInstruction = "";
+
+        if (isCourseRelated) {
+            if (studentContext) {
+                const conceptualGaps = studentContext.conceptualGaps || [];
+                const carelessErrors = studentContext.carelessErrors || [];
+                const watchedVideoTitles = studentContext.watchedVideoTitles || [];
+                const avgScore = studentContext.avgScore || 0;
+                const proficiency = studentContext.proficiency || "beginner";
+                const studentName = studentContext.studentName || "there";
+                const courseTitle = studentContext.courseTitle || "their course";
+
+                systemInstruction = `You are a friendly programming tutor for the learnmind platform.
+The student's name is ${studentName}. Use their name naturally in conversation.
+The student is learning: ${courseTitle}.
+
+Student knowledge context:
+- Concepts they are genuinely struggling with: ${conceptualGaps.length > 0 ? conceptualGaps.join(", ") : "none identified yet"}
+- Concepts they make careless mistakes on: ${carelessErrors.length > 0 ? carelessErrors.join(", ") : "none identified yet"}
+- Videos they have watched: ${watchedVideoTitles.length > 0 ? watchedVideoTitles.join(", ") : "none yet"}
+- Their average test score: ${avgScore}%
+- Their proficiency level: ${proficiency}
+
+When asked "what do you know about me" or similar, summarise their progress naturally:
+mention their name, strong topics, struggling topics, videos watched, and average score.
+Do NOT use labels like "ConceptualGap" or "CarelessError" — say "struggling with" or "doing well on" instead.
+
+Instructions:
+- If they ask about a concept they are struggling with, explain from first principles with examples
+- If they ask about a concept they make careless mistakes on, acknowledge they know it but to slow down
+- Reference watched videos when relevant
+- Keep responses concise: 3-5 sentences for simple questions, more for complex ones
+- If completely off-topic, answer briefly then redirect to the course`;
+            } else {
+                systemInstruction = `You are a friendly programming tutor for the learnmind platform.
+You don't have the student's specific progress data available right now.
+Acknowledge this honestly but warmly — say something like "I don't have your progress 
+loaded right now, but ask me any JavaScript question and I'll help!"
+Do not pretend to be a general AI. You are their course tutor.`;
+            }
+        } else {
+            systemInstruction = `You are a helpful assistant. Answer the question briefly and helpfully.
+If it relates even loosely to programming or learning, mention you can help more with 
+their JavaScript course. Keep the response under 3 sentences.`;
+        }
+
+        const chatModel = genAI.getGenerativeModel({ 
+            model: "gemini-2.5-flash-lite",
+            systemInstruction
+        });
+
+        // Cap history at last 10 messages
+        let recentHistory = (history || []).slice(-10);
+        
+        // Gemini multi-turn strictly expects alternating roles starting with 'user'
+        if (recentHistory.length > 0 && recentHistory[0].role === "assistant") {
+            recentHistory.shift();
+        }
+
+        const contents = recentHistory.map(turn => ({
+            role: turn.role === "assistant" ? "model" : "user",
+            parts: [{ text: turn.content }]
+        }));
+
+        contents.push({
+            role: "user",
+            parts: [{ text: message }]
+        });
+
+        const sleep = (ms) => new Promise(res => setTimeout(res, ms));
+        const delays = [2000, 4000, 8000];
+        let result;
+
+        for (let attempt = 0; attempt <= 3; attempt++) {
+            try {
+                result = await chatModel.generateContent({ contents });
+                break;
+            } catch (error) {
+                const msg = error.message || "";
+                const isRetryable = msg.includes("503") || msg.includes("Service Unavailable") || msg.includes("high demand");
+
+                if (isRetryable && attempt < 3) {
+                    await sleep(delays[attempt]);
+                } else {
+                    throw error;
+                }
+            }
+        }
+
+        return result.response.text().trim();
+    } catch (err) {
+        console.log("generateChatReply failed:", err.message);
+        return "Sorry, I couldn't process that right now. Please try again.";
+    }
+};
