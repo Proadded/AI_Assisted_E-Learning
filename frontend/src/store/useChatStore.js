@@ -26,7 +26,11 @@ const useChatStore = create((set, get) => ({
                 history: get().history,
             });
             set((state) => {
-                const updated = [...state.history, { role: "assistant", content: res.data.reply }];
+                const updated = [...state.history, { 
+                    role: "assistant", 
+                    content: res.data.reply,
+                    videoRef: res.data.videoRef || null
+                }];
                 return { history: updated.slice(-20), isLoading: false };
             });
         } catch (err) {

@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import CuriosityLog from "../models/curiosityLog.model.js";
+import Video from "../models/video.model.js";
 import { classifyAndTag, generateChatReply } from "../lib/aiEvaluator.js";
 import { buildStudentContext } from "../services/studentContext.service.js";
 
@@ -24,9 +25,10 @@ export const sendMessage = async (req, res) => {
 
         // Step 3 — build student context if course-related
         let studentContext = null;
+        let fullContext = null;
         if (isCourseRelated) {
             try {
-                const fullContext = await buildStudentContext(studentId.toString());
+                fullContext = await buildStudentContext(studentId.toString());
 
                 // If courseId provided, find that specific course context
                 if (courseId && fullContext?.courses?.length) {
@@ -75,13 +77,55 @@ export const sendMessage = async (req, res) => {
         if (studentContext) {
             studentContext.studentName = studentName;
         }
+
+        // Fetch course videos for reference linking
+        let courseVideos = [];
+        try {
+            if (isCourseRelated && courseId) {
+                courseVideos = await Video.find(
+                    { courseId: courseId },
+                    { _id: 1, title: 1, topic: 1, order: 1 }
+                ).sort({ order: 1 }).lean();
+            }
+
+            // If no courseId but course-related, fetch from first enrolled course
+            if (isCourseRelated && !courseId && fullContext?.courses?.length) {
+                const firstCourse = fullContext.courses[0];
+                courseVideos = await Video.find(
+                    { courseId: firstCourse.courseId },
+                    { _id: 1, title: 1, topic: 1, order: 1, courseId: 1 }
+                ).sort({ order: 1 }).lean();
+            }
+        } catch (err) {
+            courseVideos = [];
+        }
+
         // Step 4 — generate reply
-        const reply = await generateChatReply({
+        const { reply, videoId } = await generateChatReply({
             message,
             history: history || [],
             studentContext,
             isCourseRelated,
+            courseVideos,
         });
+        
+        console.log("[Chat] videoId from Gemini:", videoId);
+        console.log("[Chat] courseVideos count:", courseVideos.length);
+
+        let videoRef = null;
+        if (videoId) {
+            const matched = courseVideos.find(v => v._id.toString() === videoId);
+            if (matched) {
+                videoRef = {
+                    videoId: matched._id.toString(),
+                    title: matched.title,
+                    topic: matched.topic || null,
+                    courseId: courseId || fullContext?.courses?.[0]?.courseId || null,
+                };
+            }
+        }
+        
+        console.log("[Chat] videoRef built:", videoRef);
 
         // Step 5 — log curiosity if course-related and tagged
         let stored = false;
@@ -97,7 +141,7 @@ export const sendMessage = async (req, res) => {
         }
 
         // Step 6 — respond
-        res.status(200).json({ reply, conceptTag, stored });
+        return res.status(200).json({ reply, conceptTag, stored, videoRef });
     } catch (error) {
         console.log("Error in sendMessage controller:", error.message);
         res.status(500).json({ message: "Server error" });

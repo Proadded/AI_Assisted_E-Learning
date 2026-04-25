@@ -370,7 +370,7 @@ Message to classify: "${message}"`;
     }
 };
 
-export const generateChatReply = async ({ message, history, studentContext, isCourseRelated }) => {
+export const generateChatReply = async ({ message, history, studentContext, isCourseRelated, courseVideos = [] }) => {
     try {
         let systemInstruction = "";
 
@@ -411,6 +411,25 @@ You don't have the student's specific progress data available right now.
 Acknowledge this honestly but warmly — say something like "I don't have your progress 
 loaded right now, but ask me any JavaScript question and I'll help!"
 Do not pretend to be a general AI. You are their course tutor.`;
+            }
+
+            if (courseVideos.length > 0) {
+                const videoList = courseVideos
+                    .map(v => `- videoId: "${v._id}" | title: "${v.title}" | topic: "${v.topic || ''}"`)
+                    .join("\n");
+
+                systemInstruction += `
+
+Available course videos for reference:
+${videoList}
+
+At the END of your response, if a specific video is directly relevant to the 
+student's question, output this exact line on its own line with no other text around it:
+VIDEO_REF:<videoId>
+
+Only include VIDEO_REF if you are confident the video covers exactly what the 
+student asked. If no video is clearly relevant, do not include VIDEO_REF at all.
+Example: VIDEO_REF:69b6ea3eb9ba21277574925d`;
             }
         } else {
             systemInstruction = `You are a helpful assistant. Answer the question briefly and helpfully.
@@ -461,9 +480,21 @@ their JavaScript course. Keep the response under 3 sentences.`;
             }
         }
 
-        return result.response.text().trim();
+        const raw = result.response.text().trim();
+        console.log("[Chat] raw Gemini response tail:", raw.slice(-100));
+
+        if (!isCourseRelated) {
+            return { reply: raw, videoId: null };
+        }
+
+        const videoRefMatch = raw.match(/VIDEO_REF:([a-f0-9]{24})/);
+        console.log("[Chat] VIDEO_REF match:", videoRefMatch);
+        const videoId = videoRefMatch ? videoRefMatch[1] : null;
+        const reply = raw.replace(/\nVIDEO_REF:[a-f0-9]{24}/, "").trim();
+
+        return { reply, videoId };
     } catch (err) {
         console.log("generateChatReply failed:", err.message);
-        return "Sorry, I couldn't process that right now. Please try again.";
+        return { reply: "Sorry, I couldn't process that right now. Please try again.", videoId: null };
     }
 };

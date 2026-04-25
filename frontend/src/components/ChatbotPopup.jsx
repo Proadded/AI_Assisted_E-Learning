@@ -79,6 +79,74 @@ function MsgText({ text }) {
     );
 }
 
+function VideoRefCard({ videoRef }) {
+  if (!videoRef?.videoId || !videoRef?.courseId) return null;
+
+  const url = `/course/${videoRef.courseId}?video=${videoRef.videoId}`;
+
+  return (
+    <a
+      href={url}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 10,
+        marginTop: 10,
+        padding: "10px 13px",
+        background: "rgba(212,134,10,0.08)",
+        border: "1px solid rgba(212,134,10,0.2)",
+        borderRadius: 10,
+        textDecoration: "none",
+        transition: "background 0.18s, border-color 0.18s",
+        cursor: "pointer",
+      }}
+      onMouseEnter={e => {
+        e.currentTarget.style.background = "rgba(212,134,10,0.14)";
+        e.currentTarget.style.borderColor = "rgba(212,134,10,0.35)";
+      }}
+      onMouseLeave={e => {
+        e.currentTarget.style.background = "rgba(212,134,10,0.08)";
+        e.currentTarget.style.borderColor = "rgba(212,134,10,0.2)";
+      }}
+    >
+      <div style={{
+        width: 32, height: 32,
+        borderRadius: 8,
+        background: "rgba(212,134,10,0.15)",
+        border: "1px solid rgba(212,134,10,0.25)",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        flexShrink: 0,
+      }}>
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="#D4860A">
+          <polygon points="5,3 19,12 5,21"/>
+        </svg>
+      </div>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{
+          fontSize: 12.5,
+          fontWeight: 600,
+          color: "#F0EBE1",
+          whiteSpace: "nowrap",
+          overflow: "hidden",
+          textOverflow: "ellipsis",
+          lineHeight: 1.3,
+          marginBottom: 2,
+        }}>
+          {videoRef.title}
+        </div>
+        <div style={{
+          fontSize: 10.5,
+          color: "rgba(247,245,240,0.4)",
+          fontFamily: "'DM Mono', monospace",
+          letterSpacing: "0.3px",
+        }}>
+          {videoRef.topic ? `${videoRef.topic} · ` : ""}Watch video →
+        </div>
+      </div>
+    </a>
+  );
+}
+
 export default function ChatbotPopup() {
     const { authUser } = useAuthStore();
     const { isOpen, history, isLoading, error, openChat, closeChat, sendMessage } = useChatStore();
@@ -477,6 +545,7 @@ export default function ChatbotPopup() {
                                         <div className="cb-msg-text">
                                             <MsgText text={msg.content} />
                                         </div>
+                                        {!isUser && msg.videoRef && <VideoRefCard videoRef={msg.videoRef} />}
                                     </div>
                                 </div>
                             );

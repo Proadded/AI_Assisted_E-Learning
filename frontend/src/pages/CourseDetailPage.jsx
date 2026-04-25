@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { useParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import useCourseStore from "../store/useCourseStore.js";
 import { extractYouTubeId } from "../lib/utils.js";
 import toast from "react-hot-toast";
@@ -300,6 +300,16 @@ const CSS = `
     letter-spacing: 0.3px;
   }
 
+  /* ── Highlight Pulse ── */
+  .video-highlight {
+    animation: highlight-pulse 2.5s ease forwards;
+  }
+  @keyframes highlight-pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(212,134,10,0.5); }
+    30%  { box-shadow: 0 0 0 8px rgba(212,134,10,0.2); }
+    100% { box-shadow: 0 0 0 0 rgba(212,134,10,0); }
+  }
+
   /* ── Utility ── */
   .cdp-empty {
     padding: 32px 20px;
@@ -450,6 +460,7 @@ const LessonList = ({ lessons = [], activeLessonIndex, completedVideoIds, onSele
       return (
         <div
           key={lesson._id}
+          id={`video-${lesson._id}`}
           className={`cdp-lesson-item${active ? " cdp-active" : ""}`}
           onClick={() => onSelect(i)}
         >
@@ -477,6 +488,9 @@ const LessonList = ({ lessons = [], activeLessonIndex, completedVideoIds, onSele
 // ─── Main Page ────────────────────────────────────────────────────────────────
 const CourseDetailPage = () => {
   const { courseId } = useParams();
+  const [searchParams] = useSearchParams();
+  const highlightVideoId = searchParams.get("video");
+
   const {
     courseMetadata, lessons, isLoading,
     completedVideoIds, activeLessonIndex,
@@ -489,6 +503,19 @@ const CourseDetailPage = () => {
     fetchCourse(courseId);
     return () => resetCourse();
   }, [courseId, fetchCourse, resetCourse]);
+
+  useEffect(() => {
+    if (!highlightVideoId || !lessons?.length) return;
+    // Small delay to let the DOM render
+    setTimeout(() => {
+      const el = document.getElementById(`video-${highlightVideoId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+        el.classList.add("video-highlight");
+        setTimeout(() => el.classList.remove("video-highlight"), 2500);
+      }
+    }, 400);
+  }, [highlightVideoId, lessons]);
 
   if (isLoading) return (
     <div className="cdp-root">
