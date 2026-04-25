@@ -11,6 +11,11 @@ const useAuthStore = create((set) => ({
     isCheckingAuth: true,
 
     checkAuth: async () => {
+        const token = localStorage.getItem("token");
+        if (!token) {
+            set({ authUser: null, isCheckingAuth: false });
+            return;
+        }
         try {
             const res = await axiosInstance.get("/auth/check");
             set({ authUser: res.data});
@@ -26,10 +31,11 @@ const useAuthStore = create((set) => ({
         set({ isSigningUp: true });
         try {
             const res = await axiosInstance.post("/auth/signup", data);
+            localStorage.setItem("token", res.data.token);
             set({ authUser: res.data });
             toast.success("Account created successfully");
         } catch (err) {
-            toast.error(err.response.data.message);
+            toast.error(err.response?.data?.message || "Error signing up");
         } finally {
             set({ isSigningUp: false });
         }
@@ -39,10 +45,11 @@ const useAuthStore = create((set) => ({
         set({ isLoggingIn: true });
         try {
             const res = await axiosInstance.post("/auth/login", data);
+            localStorage.setItem("token", res.data.token);
             set({ authUser: res.data });
             toast.success("Logged in successfully");
         } catch (err) {
-            toast.error(err.response.data.message);
+            toast.error(err.response?.data?.message || "Error logging in");
         } finally {
             set({ isLoggingIn: false });
         }
@@ -51,10 +58,11 @@ const useAuthStore = create((set) => ({
     logout: async () => {
         try {
             await axiosInstance.post("/auth/logout");
+            localStorage.removeItem("token");
             set({ authUser: null });
             toast.success("Logged out successfully");
         } catch (err) {
-            toast.error(err.response.data.message);
+            toast.error(err.response?.data?.message || "Error logging out");
         } 
     },
     // setUser: (user) => set({ user }),

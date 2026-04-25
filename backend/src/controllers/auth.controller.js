@@ -59,12 +59,13 @@ export const signup = async (req, res) => {
       }
 
       //generate jwt token
-      generateToken(savedUser._id, res);
+      const token = generateToken(savedUser._id, res);
       return res.status(201).json({
         _id: savedUser._id,
         fullName: savedUser.fullName,
         email: savedUser.email,
         role: savedUser.role,
+        token,
       });
 
 
@@ -94,12 +95,13 @@ export const login = async (req, res) => {
     }
 
     //generate jwt token
-    generateToken(user._id, res);
+    const token = generateToken(user._id, res);
     return res.status(200).json({
       _id: user._id,
       fullName: user.fullName,
       email: user.email,
       role: user.role,
+      token,
     });
   } catch (error) {
     console.log("Error in login controller:", error.message);
@@ -108,18 +110,7 @@ export const login = async (req, res) => {
 };
 
 export const logout = (req, res) => {
-  try {
-    res.cookie("jwt", "", {
-      maxAge: 0,
-      httpOnly: true,
-      sameSite: process.env.NODE_ENV === "production" ? "none" : "lax",
-      secure: process.env.NODE_ENV === "production",
-    });
-    res.status(200).json({ message: "Logged out successfully" });
-  } catch (error) {
-    console.log("Error in logout controller:", error.message);
-    return res.status(500).json({ message: "Internal Server error" });
-  }
+  res.status(200).json({ message: "Logged out successfully" });
 };
 
 export const checkAuth = async (req, res) => {
