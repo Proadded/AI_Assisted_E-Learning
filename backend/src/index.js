@@ -43,7 +43,7 @@ const PORT = process.env.PORT;
 
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
-  cors: { origin: process.env.CLIENT_URL, credentials: true },,
+  cors: { origin: process.env.CLIENT_URL, credentials: true },
 });
 app.set("io", io); // accessible in controllers via req.app.get("io")
 
