@@ -504,7 +504,7 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!authUser?._id) return;
 
-    const socket = io("http://localhost:3001", { withCredentials: true });
+    const socket = io(import.meta.env.VITE_API_URL?.replace('/api', '') || "http://localhost:3001", { withCredentials: true });
 
     socket.on("context:updated", ({ studentId }) => {
       if (studentId === authUser._id.toString()) {
