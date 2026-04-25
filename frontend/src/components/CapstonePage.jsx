@@ -389,7 +389,7 @@ const CapstonePage = () => {
 
   // ── 4. Socket.IO fallback navigation ─────────────────────────────────────
   useEffect(() => {
-    const socket = io("http://localhost:3001", { withCredentials: true });
+    const socket = io(import.meta.env.VITE_API_URL?.replace('/api', '') || "http://localhost:3001", { withCredentials: true });
 
     socket.on("capstone:result", ({ sessionId: resultSessionId, passed, score }) => {
       if (sessionId && String(resultSessionId) === String(sessionId)) {
